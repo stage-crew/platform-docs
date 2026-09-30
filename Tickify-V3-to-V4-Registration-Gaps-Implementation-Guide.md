@@ -2,9 +2,11 @@
 
 ## Purpose
 
-V4 must support seven registration features that V3 events already rely on; this guide specifies each one as config plus the expected behaviour.
+V4 must support nine registration and checkout features; this guide specifies each one as config plus the expected behaviour.
 
-For each gap you get: what it does, which live events need it, the config to set, the expected V4 behaviour, and a working reference event. All config lives in sample/mock data on the frontend (tickify-web); there is no backend work in scope.
+For each gap you get: what it does, which live events need it, the config to set, the expected V4 behaviour, and a working reference event where one exists.
+
+**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gaps 8–9 (cart with order hold timeout, abandoned-cart reminders) cannot be done frontend-only: holds, expiry, seat release and scheduled emails must run on the server. Their config is specified here the same way, but each needs backend work before it can be QA'd end to end.
 
 How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference event. Tick it off in the QA checklist at the end.
 
@@ -19,7 +21,8 @@ How to use it: pick a gap, apply the config to the listed event in V4, then comp
 | 5 | Separate registration page per tier | Tier | [CA Bangladesh Accounting Day Run 2026](https://tickify.bickfoundation.org/o/icab/ca-bangladesh-accounting-day-run-2026) | [dhaka-marathon](https://abir-web-development.up.railway.app/events/dhaka-marathon) |
 | 6 | Race / marathon wizard | Event + tier | [CA Bangladesh Accounting Day Run 2026](https://tickify.bickfoundation.org/o/icab/ca-bangladesh-accounting-day-run-2026) | [dhaka-marathon](https://abir-web-development.up.railway.app/events/dhaka-marathon) |
 | 7 | Tier-level coupon assignment | Tier | Any event with coupons | — |
-| 8 | Pre-registration and notify me | Event | Any event announced before sale | Stage Laughs, Winter Charity Gala (sample data) |
+| 8 | Cart and order hold timeout | Event | All event types | [V4 cart](https://abir-web-development.up.railway.app/cart) |
+| 9 | Abandoned-cart reminder email | Event | Events with order hold timeout disabled | — |
 
 ## Core concepts
 
@@ -27,7 +30,7 @@ Every setting lives either on the event (applies to all tiers) or on a ticket ti
 
 | Level | Where it lives | Examples |
 | --- | --- | --- |
-| Event | Event settings object | `registrationMode`, `registrationLayout`, `showClusterFilter`, `onPageRegistration`, `collectIndividualInformation`, `teamRegistration`, `registrationFields` |
+| Event | Event settings object | `registrationMode`, `registrationLayout`, `showClusterFilter`, `onPageRegistration`, `collectIndividualInformation`, `teamRegistration`, `registrationFields`, `orderHold`, `abandonedCartReminder` |
 | Ticket tier | Each item in the event's tiers list | `cluster`, `separateRegistrationPage`, `teamRegistration`, `registrationFields`, `allowedCouponCodes`, `cardImageUrl` |
 
 **Field scope.** Every registration field has a `scope`:
@@ -36,6 +39,8 @@ Every setting lives either on the event (applies to all tiers) or on a ticket ti
 - `"attendee"` — asked once for each ticket or person (for example student ID, membership number).
 
 **Field shape.** A registration field takes `id`, `label`, optional `placeholder`, optional `helpText`, `required` (default false), `scope`, optional `type` (text by default; also `textarea`, `select`) and `options` when `type` is `select`.
+
+**Regular vs seated tickets.** A regular (general admission) ticket is a quantity from a tier. A seated ticket is a specific seat on the seat map. This distinction drives Gaps 8–9: only seated tickets are ever reserved by a cart.
 
 ## Gap 1 — Team registration mode
 
@@ -306,61 +311,78 @@ Restrict which coupon codes can be used on each tier.
 
 **Open question:** what an empty list means — no coupons allowed on this tier, or all event coupons allowed. Confirm against the [ticket category config doc](https://github.com/stage-crew/platform-docs/blob/main/ticket-category-config.md#ticketcategory-config).
 
-## Gap 8 — Pre-registration and notify me
+## Gap 8 — Cart and order hold timeout
 
-Let an event be announced before it sells: the buy button is replaced by a Pre-register or Notify me button until tickets open, and pre-registrants can optionally buy early during an early-access window.
+V4 needs a cart for every event type. The cart is always on; there is no setting to turn it off. The only event-level control is the **Order Hold Timeout** toggle, which sets how long an unpaid order stays in the cart.
 
-- **Reference events (tickify-web sample data):** Stage Laughs: Live Comedy (notify me, minimal), Winter Charity Gala (pre-register with early access), Aarong FIFA World Cup 2026 Watch Party (window already closed, sale open).
-- **Spec:** [Pre-registration and notify me](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#pre-registration-and-notify-me)
-
-**It is not a registration mode.** It is an overlay on any mode, set in `settings.preRegistration`. Adding the object turns it on; removing it turns it off. There is no separate boolean.
+- **Reference:** [V4 cart](https://abir-web-development.up.railway.app/cart)
 
 **Config — event settings.**
 
 ```ts
-preRegistration: {
-  cta: "pre_register" | "notify_me",
-  ctaLabel?: string,             // overrides the label derived from cta
-  confirmationMessage?: string,
-  fields?: RegistrationField[],  // every field must be scope: "order"
-  loginRequired?: boolean,
-  capacity?: number | null,      // display only; enforced server-side
-  opensAt?: ISODateTime | null,
-  closesAt?: ISODateTime | null, // defaults to registrationOpensAt
-  earlyAccess?: { startsAt: ISODateTime, eligibility?: "all" | "selected" },
-  notifications?: ("email" | "sms" | "whatsapp" | "push")[],
-}
+orderHold: {
+  enabled: true,
+  durationMinutes: 10, // default 10; no min or max; only used when enabled
+},
 ```
 
-**Timeline**
+**Expected behaviour — cart (always on)**
 
-1. `opensAt` — the list opens; the event shows state `pre_registration` and the Pre-register / Notify me button.
-2. `earlyAccess.startsAt` — state becomes `early_access`; eligible viewers see the buy button.
-3. `registrationOpensAt` — general sale opens; the pre-registration module removes itself.
+- Every event, of every type, checks out through the cart.
+- The registration form is always filled in before tickets are added to the cart. This includes event and tier fields, team fields (Gap 1) and every runner's details in the race wizard (Gap 6). The cart holds completed registrations, and checkout only takes payment.
+- Because registration comes first, every cart has the buyer's email, signed in or not.
+- The cart page is always reachable, including when it is empty; an empty cart shows an empty state rather than an error or redirect.
+- **Regular tickets are not reserved by adding them to the cart.** Availability is only taken at payment. If a regular tier sells out while it sits in a cart, checkout must re-check availability and tell the buyer before payment is attempted, not after.
+- **Seated tickets are reserved** when added to the cart, for as long as the hold setting below allows.
 
-The early-access window is derived from `earlyAccess.startsAt` and `registrationOpensAt`; never store it separately. `closesAt` closes the list, not the sale, and is unrelated to `registrationClosesAt`.
+**Expected behaviour — Order Hold Timeout enabled**
 
-**Who gets early access**
+- The organizer sets the hold duration in minutes. The default is 10, and there is no minimum or maximum.
+- The timer starts when the first item is added to the cart. Adding more items does not reset it. It is enforced on the server, not only in the browser.
+- The buyer sees a visible countdown in the cart and checkout.
+- When the time runs out, the unpaid order expires and the cart is emptied.
+- For seated events, the reserved seats are released and become selectable by other buyers immediately.
+- A payment already in progress when the timer runs out must not be lost: either extend the hold while the payment gateway session is open, or reject and refund. Decide which.
 
-- The viewer must be on the list (`viewer.status === "registered"`).
-- If `eligibility` is `"selected"`, the viewer also needs `earlyAccessGranted`.
-- With no viewer (not signed in, or the prerendered page), the state stays `pre_registration`.
+**Expected behaviour — Order Hold Timeout disabled**
 
-**Pre-registration form**
+- The unpaid order stays in the cart for as long as the event is live.
+- For seated events, the selected seats stay reserved for that buyer for the same period.
+- Regular tickets are still not reserved.
+- When the event ends (or goes off sale), open carts expire.
 
-- Shows an input only for name, email or phone the viewer's profile does not already have; if all three are known, it shows a confirm step instead.
-- Extra `fields` must not repeat name, email or phone, and must not use `scope: "attendee"`. Either mistake throws in development.
-- The list shows as full only when the viewer data says `listFull`; `capacity` is just a displayed number.
+**Risk — seated events with the hold disabled.** Abandoned carts keep seats reserved until the event ends. On a seated event, every abandoned cart removes those seats from sale; the seat map can look sold out while the actual sell-through is far lower. Recommendation: allow `enabled: false` only on non-seated events, or require the hold to be enabled when the event has a seat map. Pending sign-off.
 
-**Rules to keep consistent**
+**Open questions**
 
-- `isRegistrationOpen` and `registrationOpensAt` must agree. A warning fires in development if the boolean is true before the sale date, or false after it.
-- Only the pre-registration button reads the clock and viewer, on the client. Do not pass `now` from the page, or the state freezes at build time.
-- For an event that only needs to say "entries open later", use `isRegistrationOpen: false` with `comingSoonText` instead of this config.
+- When a hold expires, is the buyer's registration data discarded with the cart, or kept so they can re-add without re-typing it? This matters most for race and team registrations with many attendees.
+- With no minimum, what happens if an organizer sets `durationMinutes` to 0 or leaves it blank while the hold is enabled?
 
-**Known gap:** a direct tier URL (`/register/<tier-id>`) is prerendered without a viewer, so it blocks eligible early-access buyers. Early access on tier pages stays incomplete until that route can resolve a viewer.
+## Gap 9 — Abandoned-cart reminder email
 
-**Open question:** which live V4 events need pre-registration, and whether they use Pre-register or Notify me.
+Let organizers send a reminder email, a set number of days before the event, to buyers who added tickets to the cart but did not pay. The email template itself is managed on the admin side and is out of scope here.
+
+**Availability.** The option appears in Event Settings **only when Order Hold Timeout (Gap 8) is disabled**. When the hold is enabled it is hidden and forced off.
+
+**Config — event settings.**
+
+```ts
+abandonedCartReminder: {
+  enabled: true,        // only settable when orderHold.enabled === false
+  daysBeforeEvent: 3,   // send N days before the event starts
+},
+```
+
+**Expected behaviour**
+
+- On the day set by `daysBeforeEvent`, a reminder goes to every buyer with an unpaid, non-empty cart for this event.
+- Not sent to buyers who have since paid for this event, or when every item in their cart is sold out.
+- One reminder per cart.
+
+**Open questions**
+
+- Carts abandoned after the send date never get a reminder. Is that acceptable, or should a later cart be picked up on the next daily run until the event starts?
+- One reminder only, or several (for example `daysBeforeEvent: [7, 1]`)?
 
 ## Migration and QA checklist
 
@@ -388,13 +410,20 @@ The early-access window is derived from `earlyAccess.startsAt` and `registration
 - [ ] Required fields block registration form submission; `order` vs `attendee` scope asks the right number of times
 - [ ] Coupons outside a tier's `allowedCouponCodes` are rejected
 
-**Pre-registration events**
+**Cart, hold timeout and reminders**
 
-- [ ] Pre-register / Notify me button replaces the buy button before the sale
-- [ ] Early access shows the buy button only to eligible viewers
-- [ ] Module disappears once general sale opens
-- [ ] Form asks only for missing name, email or phone
-- [ ] `isRegistrationOpen` and `registrationOpensAt` agree
+- [ ] Every event checks out through the cart; the cart page loads when empty
+- [ ] Registration form (including team and runner details) must be completed before an item can be added to the cart
+- [ ] Hold defaults to 10 minutes; timer runs from the first item and does not reset when more are added
+- [ ] Adding regular tickets to the cart does not reduce `remaining`
+- [ ] A regular tier that sells out while in a cart is caught at checkout, before payment
+- [ ] Adding seats to the cart reserves them; other buyers cannot select them
+- [ ] Hold enabled: countdown shown; order expires at the set minutes; seats released immediately
+- [ ] Hold enabled: payment in progress at expiry is handled per the decided rule
+- [ ] Hold disabled: cart and seat reservations persist until the event ends, then expire
+- [ ] Reminder option is hidden when the hold is enabled
+- [ ] Reminder sent `daysBeforeEvent` days before the event to unpaid, non-empty carts only
+- [ ] No reminder after payment or when the cart is sold out
 
 ## References
 
