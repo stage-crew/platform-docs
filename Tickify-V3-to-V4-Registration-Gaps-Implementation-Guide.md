@@ -1,14 +1,14 @@
-# Tickify V3 → V4 Registration Gaps: Implementation Guide
+# Tickify V3 → V4 Registration and Checkout Gaps: Implementation Guide
 
 ## Purpose
 
-V4 must support nine registration and checkout features; this guide specifies each one as config plus the expected behaviour.
+V4 must support twelve registration and checkout features; this guide specifies each one as config plus the expected behaviour.
 
-For each gap you get: what it does, which live events need it, the config to set, the expected V4 behaviour, and a working reference event where one exists.
+For each gap you get: what it does, which live events need it, the config to set (where there is any), the expected V4 behaviour, and a working reference where one exists.
 
-**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gaps 8–9 (cart with order hold timeout, abandoned-cart reminders) cannot be done frontend-only: holds, expiry, seat release and scheduled emails must run on the server. Their config is specified here the same way, but each needs backend work before it can be QA'd end to end.
+**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end.
 
-How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference event. Tick it off in the QA checklist at the end.
+How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference. Tick it off in the QA checklist at the end.
 
 ## Gap summary
 
@@ -23,10 +23,13 @@ How to use it: pick a gap, apply the config to the listed event in V4, then comp
 | 7 | Tier-level coupon assignment | Tier | Any event with coupons | — |
 | 8 | Cart and order hold timeout | Event | All event types | [V4 cart](https://abir-web-development.up.railway.app/cart) |
 | 9 | Abandoned-cart reminder email | Event | Events with order hold timeout disabled | — |
+| 10 | Checkout page (review, coupons, add-on services) | Platform (add-ons TBD) | All event types | [V4 checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001) |
+| 11 | Order confirmation page | Platform | All event types | [V4 confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success) |
+| 12 | Event card: price and Book now | Platform | All event types | — |
 
 ## Core concepts
 
-Every setting lives either on the event (applies to all tiers) or on a ticket tier (applies to that tier only). Tier-level config adds to or overrides event-level config.
+Every setting lives either on the event (applies to all tiers) or on a ticket tier (applies to that tier only). Tier-level config adds to or overrides event-level config. Gaps 10–12 are platform behaviour with no per-event setting (except the open question on add-on services in Gap 10).
 
 | Level | Where it lives | Examples |
 | --- | --- | --- |
@@ -40,7 +43,18 @@ Every setting lives either on the event (applies to all tiers) or on a ticket ti
 
 **Field shape.** A registration field takes `id`, `label`, optional `placeholder`, optional `helpText`, `required` (default false), `scope`, optional `type` (text by default; also `textarea`, `select`) and `options` when `type` is `select`.
 
-**Regular vs seated tickets.** A regular (general admission) ticket is a quantity from a tier. A seated ticket is a specific seat on the seat map. This distinction drives Gaps 8–9: only seated tickets are ever reserved by a cart.
+**Purchase flow.** Every event, of every type, follows the same path:
+
+**Registration form → Checkout page → Payment → Confirmation page**
+
+1. The buyer completes the registration form: event and tier fields, team fields (Gap 1), or every runner's details in the race wizard (Gap 6).
+2. Submitting the form creates an unpaid order and takes the buyer straight to that order's checkout page (`/checkout/<order-id>`). There is no separate "add to cart" step.
+3. On the checkout page the buyer reviews the order, redeems coupons, chooses additional services and pays (Gap 10).
+4. After a successful payment the buyer lands on the confirmation page (Gap 11).
+
+If the buyer leaves before paying, the unpaid order stays in their cart (Gap 8) so they can return and complete payment later, within the limits of the order hold setting. Free orders (total of 0) skip the payment step.
+
+**Regular vs seated tickets.** A regular (general admission) ticket is a quantity from a tier. A seated ticket is a specific seat on the seat map. This distinction drives Gaps 8–9: only seated tickets are ever reserved by an unpaid order.
 
 ## Gap 1 — Team registration mode
 
@@ -97,6 +111,7 @@ teamRegistration: {
 - The buyer cannot submit a team smaller than `minSize` or larger than `maxSize`.
 - Team fields are shown once; member fields repeat for each member.
 - Keep `maxPerOrder` consistent with `teamRegistration.maxSize` (both 8 in the example).
+- Submitting the team registration takes the buyer to checkout (Gap 10).
 
 **Open question:** the contents of `creatorTeamFields` and `creatorMemberFields` for Econo Carnival are not specified yet.
 
@@ -226,6 +241,7 @@ Give each tier its own registration page, reached from a category-select page, i
 - `/events/<event>/register` lists the tiers; each links to `/events/<event>/register/<tier-id>`.
 - Each tier page shows only that tier's fields plus event-level fields.
 - With `scope: "attendee"`, Student ID is asked once per ticket (up to 3 here).
+- Submitting a tier page takes the buyer to checkout (Gap 10).
 
 ## Gap 6 — Race / marathon wizard registration
 
@@ -239,7 +255,7 @@ For marathon events, combine separate tier pages (Gap 5) with race mode: a step-
 ```ts
 registrationMode: "race",
 registrationLayout: "wizard",
-onPageRegistration: false,        // no registration form on the event page
+onPageRegistration: false,          // no registration form on the event page
 collectIndividualInformation: true, // details for every runner
 showClusterFilter: true,
 ```
@@ -281,13 +297,13 @@ showClusterFilter: true,
 1. The event page shows the categories but no inline registration form.
 2. The category select page lists tiers as cards (using `cardImageUrl`), filterable by cluster.
 3. The tier page opens the wizard, which collects each runner's details and the tier's fields.
-4. The registration form is submitted at the end of the wizard.
+4. The registration form is submitted at the end of the wizard, and the buyer goes straight to checkout (Gap 10).
 
 **Check:** the reference tier URL ends in `half-marathon-memberelite` while the tier `id` is `half-marathon-member-elite`. Confirm whether the route slug is derived from `id` or set separately.
 
 ## Gap 7 — Tier-level coupon assignment
 
-Restrict which coupon codes can be used on each tier.
+Restrict which coupon codes can be used on each tier. Buyers enter coupons on the checkout page (Gap 10).
 
 **Config — on the tier.** List the allowed codes in `allowedCouponCodes`.
 
@@ -308,12 +324,16 @@ Restrict which coupon codes can be used on each tier.
 **Expected behaviour**
 
 - A code outside the tier's list is rejected for that tier.
+- In an order with more than one tier, a code applies only to the tiers that allow it, and is rejected if no tier in the order allows it.
+- Codes are validated on the server when applied at checkout, not only in the browser.
 
 **Open question:** what an empty list means — no coupons allowed on this tier, or all event coupons allowed. Confirm against the [ticket category config doc](https://github.com/stage-crew/platform-docs/blob/main/ticket-category-config.md#ticketcategory-config).
 
 ## Gap 8 — Cart and order hold timeout
 
-V4 needs a cart for every event type. The cart is always on; there is no setting to turn it off. The only event-level control is the **Order Hold Timeout** toggle, which sets how long an unpaid order stays in the cart.
+The cart holds a buyer's unpaid orders so they can come back and complete payment later. V4 needs it for every event type. The cart is always on; there is no setting to turn it off.
+
+The only event-level control is the **Order Hold Timeout** toggle in Event Settings, because not every event needs an order timeout. When it is enabled, the organizer sets the hold duration in minutes.
 
 - **Reference:** [V4 cart](https://abir-web-development.up.railway.app/cart)
 
@@ -328,39 +348,45 @@ orderHold: {
 
 **Expected behaviour — cart (always on)**
 
-- Every event, of every type, checks out through the cart.
-- The registration form is always filled in before tickets are added to the cart. This includes event and tier fields, team fields (Gap 1) and every runner's details in the race wizard (Gap 6). The cart holds completed registrations, and checkout only takes payment.
-- Because registration comes first, every cart has the buyer's email, signed in or not.
+- A **Cart** button sits in the site navbar on every page, for signed-in and guest buyers, and opens the cart page.
+- Submitting the registration form creates an unpaid order. The order appears in the cart immediately, and the buyer is taken straight to its checkout page (see Purchase flow). There is no "add to cart" step.
+- The cart shows one order card per event. Each card opens that order's checkout page (`/checkout/<order-id>`) so the buyer can resume.
+- Because registration comes first, every order has the buyer's email, signed in or not.
+- Paid orders leave the cart.
 - The cart page is always reachable, including when it is empty; an empty cart shows an empty state rather than an error or redirect.
-- **Regular tickets are not reserved by adding them to the cart.** Availability is only taken at payment. If a regular tier sells out while it sits in a cart, checkout must re-check availability and tell the buyer before payment is attempted, not after.
-- **Seated tickets are reserved** when added to the cart, for as long as the hold setting below allows.
+- **Regular tickets are not reserved by an unpaid order.** Availability is only taken at payment. If a regular tier sells out while an order for it is unpaid, checkout must re-check availability and tell the buyer before payment is attempted, not after.
+- **Seated tickets are reserved** when the order is created, for as long as the hold setting below allows.
 
 **Expected behaviour — Order Hold Timeout enabled**
 
 - The organizer sets the hold duration in minutes. The default is 10, and there is no minimum or maximum.
-- The timer starts when the first item is added to the cart. Adding more items does not reset it. It is enforced on the server, not only in the browser.
-- The buyer sees a visible countdown in the cart and checkout.
-- When the time runs out, the unpaid order expires and the cart is emptied.
+- The timer starts when the order is created (registration form submitted). Each order has its own timer. Returning to checkout, applying coupons or choosing add-on services does not reset it. It is enforced on the server, not only in the browser.
+- Each order card in the cart shows a countdown of the time left to complete payment before the order expires. The checkout page shows the same countdown.
+- When the time runs out, the unpaid order expires and leaves the cart.
 - For seated events, the reserved seats are released and become selectable by other buyers immediately.
 - A payment already in progress when the timer runs out must not be lost: either extend the hold while the payment gateway session is open, or reject and refund. Decide which.
 
 **Expected behaviour — Order Hold Timeout disabled**
 
-- The unpaid order stays in the cart for as long as the event is live.
+- The unpaid order stays in the cart for as long as the event is live. Its order card shows no countdown.
 - For seated events, the selected seats stay reserved for that buyer for the same period.
 - Regular tickets are still not reserved.
-- When the event ends (or goes off sale), open carts expire.
+- When the event ends (or goes off sale), open orders expire.
+- The abandoned-cart reminder (Gap 9) is available for the event.
 
-**Risk — seated events with the hold disabled.** Abandoned carts keep seats reserved until the event ends. On a seated event, every abandoned cart removes those seats from sale; the seat map can look sold out while the actual sell-through is far lower. Recommendation: allow `enabled: false` only on non-seated events, or require the hold to be enabled when the event has a seat map. Pending sign-off.
+**Risk — seated events with the hold disabled.** Abandoned orders keep seats reserved until the event ends. On a seated event, every abandoned order removes those seats from sale; the seat map can look sold out while the actual sell-through is far lower. Recommendation: allow `enabled: false` only on non-seated events, or require the hold to be enabled when the event has a seat map. Pending sign-off.
 
 **Open questions**
 
-- When a hold expires, is the buyer's registration data discarded with the cart, or kept so they can re-add without re-typing it? This matters most for race and team registrations with many attendees.
+- When a hold expires, is the buyer's registration data discarded with the order, or kept so they can re-register without re-typing it? This matters most for race and team registrations with many attendees.
 - With no minimum, what happens if an organizer sets `durationMinutes` to 0 or leaves it blank while the hold is enabled?
+- If a buyer registers again for the same event before paying, does the new registration merge into the existing order (one card per event) or create a second order card?
+- How does a guest buyer see their cart on another device or after clearing their browser — only through the reminder link (Gap 9), or by email lookup?
+- Can a buyer remove an unpaid order from the cart themselves, releasing any reserved seats?
 
 ## Gap 9 — Abandoned-cart reminder email
 
-Let organizers send a reminder email, a set number of days before the event, to buyers who added tickets to the cart but did not pay. The email template itself is managed on the admin side and is out of scope here.
+Let organizers send promotional reminder emails, a set number of days before the event, to buyers who registered but did not pay. Each email contains a direct link to that buyer's unpaid order so they can resume checkout. The email template and its promotional content are managed on the admin side and are out of scope here.
 
 **Availability.** The option appears in Event Settings **only when Order Hold Timeout (Gap 8) is disabled**. When the hold is enabled it is hidden and forced off.
 
@@ -375,14 +401,79 @@ abandonedCartReminder: {
 
 **Expected behaviour**
 
-- On the day set by `daysBeforeEvent`, a reminder goes to every buyer with an unpaid, non-empty cart for this event.
-- Not sent to buyers who have since paid for this event, or when every item in their cart is sold out.
-- One reminder per cart.
+- On the day set by `daysBeforeEvent`, a reminder goes to every buyer with an unpaid order for this event.
+- Each email contains a direct link to the buyer's own unpaid order. The link opens that order's checkout page (Gap 10), with the registration details and tickets (and seats, for seated events) already in place.
+- The link works without signing in and uses an unguessable token. Do not use the plain order ID: the reference IDs (`watch-party-order-2027-001`) are sequential, so a link of that form would let anyone reach other buyers' orders and registration details by changing the number.
+- If the order can no longer be paid (event off sale, or every tier in it sold out), the link shows a clear message instead of an error. If the order has since been paid, the link opens its confirmation page (Gap 11).
+- Not sent to buyers who have since paid for this event, or when every tier in their order is sold out.
+- One reminder per unpaid order.
 
 **Open questions**
 
-- Carts abandoned after the send date never get a reminder. Is that acceptable, or should a later cart be picked up on the next daily run until the event starts?
+- Orders abandoned after the send date never get a reminder. Is that acceptable, or should a later order be picked up on the next daily run until the event starts?
 - One reminder only, or several (for example `daysBeforeEvent: [7, 1]`)?
+- Should organizers also be able to send a reminder on demand ("Send now") from the dashboard, in addition to the scheduled one?
+
+## Gap 10 — Checkout page
+
+After submitting the registration form, the buyer goes straight to the checkout page for that order. Checkout is where the buyer reviews the order, redeems coupons, chooses additional services and pays. It is not only a payment step.
+
+- **Reference:** [V4 checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001)
+
+**Config.** None for the page itself. Coupon rules come from each tier's `allowedCouponCodes` (Gap 7), and the countdown comes from the event's `orderHold` (Gap 8). Add-on service config is an open question below.
+
+**Expected behaviour**
+
+- The page lives at `/checkout/<order-id>` and is reached from the registration form, from an order card in the cart, or from the reminder link (Gap 9).
+- **Order review:** shows the event, tiers, quantities (and seats, for seated events) and the details entered on the registration form.
+- **Coupons:** a coupon field validated on the server against each tier's `allowedCouponCodes` (Gap 7). The price summary updates when a code is applied or removed.
+- **Additional services:** the buyer can choose optional services, such as ticket delivery via WhatsApp and a refund guarantee. Selected services appear in the price summary. If WhatsApp delivery is selected, a WhatsApp number is required (prefilled if the registration form collected a phone number).
+- **Hold timer:** when the order hold is enabled, the countdown is shown here. Nothing on this page resets it.
+- **Before payment:** availability of regular tiers is re-checked. If any tier in the order has sold out, the buyer is told and payment is not started.
+- **Payment succeeds:** the buyer goes to the confirmation page (Gap 11) and the order leaves the cart.
+- **Payment fails or is cancelled:** the buyer returns to the checkout page with a clear message. The order stays in the cart, subject to the hold timer.
+- **Free orders** (total of 0, including after a 100% coupon): no payment step. Confirming the order goes straight to the confirmation page.
+
+**Open questions**
+
+- Are additional services offered on every event, or does the organizer choose per event? Who sets their price (Tickify or the organizer)?
+- Refund guarantee: is it priced per order or per ticket, as a fixed fee or a percentage, and what are its terms?
+- Do free orders still show the checkout page (for example to offer WhatsApp delivery), or go straight from registration to confirmation?
+- Can the buyer edit registration details from checkout, or must they go back to the registration form?
+
+## Gap 11 — Order confirmation page
+
+V4 currently has no order confirmation page. Add one, shown after a successful payment, or after registration completes for a free order.
+
+- **Template:** [V4 confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success)
+
+**Config.** None.
+
+**Expected behaviour**
+
+- The page lives at `/checkout/<order-id>/success`. Layout and content follow the V4 template.
+- It confirms the order ID, event and tickets, and how the tickets will be delivered (including WhatsApp, if chosen at checkout).
+- It is shown only when the server has confirmed the order as paid (or as a completed free registration). The payment gateway's redirect alone is not enough; the page reads the order status from the server.
+- Opening the URL for an unpaid order sends the buyer to that order's checkout page instead.
+- Reloading or reopening the page shows the same confirmation. It never creates a second order or a second charge.
+
+**Open question:** what does the buyer see if the payment gateway has not yet confirmed the payment (pending status)?
+
+## Gap 12 — Event card: price and Book now
+
+On event cards (wherever events are listed), show **"Starts from <price>"** on the left and the **"Book now"** button on the right.
+
+**Config.** None. The price and sold-out state come from the event's tiers.
+
+**Expected behaviour**
+
+- Left side: "Starts from" followed by the lowest tier price. Every tier counts, including tiers that are sold out or not yet on sale.
+- Free events (every tier priced at 0) show "Free" instead of "Starts from <price>".
+- Right side: the "Book now" button.
+- Sold-out events (every tier at `remaining: 0`): the button label changes to "Sold out" and the button is disabled.
+- The same layout applies on every event card, wherever event cards appear.
+
+**Open question:** an event with both free and paid tiers has a lowest price of 0. Should its card show "Free" (which may read as the whole event being free) or "Starts from Free"?
 
 ## Migration and QA checklist
 
@@ -402,7 +493,7 @@ abandonedCartReminder: {
 - [ ] Each tier page opens the wizard and collects per-runner fields
 - [ ] Behaviour matches V3 and the dhaka-marathon reference
 
-**All events**
+**All events — registration**
 
 - [ ] Cluster filter groups tiers correctly
 - [ ] Event-level fields show on every tier
@@ -410,20 +501,50 @@ abandonedCartReminder: {
 - [ ] Required fields block registration form submission; `order` vs `attendee` scope asks the right number of times
 - [ ] Coupons outside a tier's `allowedCouponCodes` are rejected
 
-**Cart, hold timeout and reminders**
+**Purchase flow and checkout**
 
-- [ ] Every event checks out through the cart; the cart page loads when empty
-- [ ] Registration form (including team and runner details) must be completed before an item can be added to the cart
-- [ ] Hold defaults to 10 minutes; timer runs from the first item and does not reset when more are added
-- [ ] Adding regular tickets to the cart does not reduce `remaining`
-- [ ] A regular tier that sells out while in a cart is caught at checkout, before payment
-- [ ] Adding seats to the cart reserves them; other buyers cannot select them
-- [ ] Hold enabled: countdown shown; order expires at the set minutes; seats released immediately
+- [ ] Every event follows Registration form → Checkout → Payment → Confirmation
+- [ ] Submitting the registration form (including team and runner details) creates an unpaid order and opens its checkout page
+- [ ] Checkout shows the order review, coupon field, additional services and price summary
+- [ ] Coupons are validated on the server; in a mixed order they apply only to tiers that allow them
+- [ ] Selected add-on services appear in the price summary; WhatsApp delivery requires a number
+- [ ] A regular tier that sells out while its order is unpaid is caught at checkout, before payment
+- [ ] Failed or cancelled payment returns to checkout with a message; the order stays in the cart
+- [ ] Free orders skip payment and reach the confirmation page
+
+**Cart and hold timeout**
+
+- [ ] Cart button is in the navbar on every page, signed in or not
+- [ ] Cart shows one order card per event, each opening its checkout page; empty cart shows an empty state
+- [ ] Unpaid regular tickets do not reduce `remaining`
+- [ ] Seats are reserved when the order is created; other buyers cannot select them
+- [ ] Hold defaults to 10 minutes; timer starts when the order is created and is not reset by revisiting checkout, coupons or add-ons
+- [ ] Hold enabled: countdown shown on each order card and on checkout; order expires at the set minutes; seats released immediately
 - [ ] Hold enabled: payment in progress at expiry is handled per the decided rule
-- [ ] Hold disabled: cart and seat reservations persist until the event ends, then expire
+- [ ] Hold disabled: no countdown; order and seat reservations persist until the event ends, then expire
+- [ ] Paid orders leave the cart
+
+**Abandoned-cart reminders**
+
 - [ ] Reminder option is hidden when the hold is enabled
-- [ ] Reminder sent `daysBeforeEvent` days before the event to unpaid, non-empty carts only
-- [ ] No reminder after payment or when the cart is sold out
+- [ ] Reminder sent `daysBeforeEvent` days before the event to buyers with unpaid orders only
+- [ ] Each email links directly to the buyer's own unpaid order and opens its checkout without sign-in
+- [ ] The link uses an unguessable token; changing it does not reveal another buyer's order
+- [ ] Link to an off-sale or sold-out order shows a clear message; link to a paid order opens its confirmation page
+- [ ] No reminder after payment or when every tier in the order is sold out
+
+**Confirmation page**
+
+- [ ] Confirmation page shown after successful payment or free registration, matching the V4 template
+- [ ] Page reads order status from the server; an unpaid order's success URL redirects to its checkout
+- [ ] Reloading the page does not create a second order or charge
+
+**Event cards**
+
+- [ ] "Starts from <price>" on the left and "Book now" on the right on every event card
+- [ ] Lowest price includes sold-out and not-yet-on-sale tiers
+- [ ] Free events show "Free"
+- [ ] Sold-out events show a disabled "Sold out" button
 
 ## References
 
@@ -435,3 +556,5 @@ Full list of event settings and registration modes: [Tickify event details and r
 | CA Bangladesh Accounting Day Run 2026 | [tickify.live](https://tickify.live/event/ca-bangladesh-accounting-day-run-2026/) | [bickfoundation](https://tickify.bickfoundation.org/o/icab/ca-bangladesh-accounting-day-run-2026) |
 
 Reference builds: [creator-tech-expo](https://abir-web-development.up.railway.app/events/creator-tech-expo), [food-carnival](https://abir-web-development.up.railway.app/events/food-carnival), [dhaka-marathon](https://abir-web-development.up.railway.app/events/dhaka-marathon).
+
+Checkout references: [cart](https://abir-web-development.up.railway.app/cart), [checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001), [confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success).
