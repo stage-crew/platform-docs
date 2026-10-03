@@ -2,11 +2,11 @@
 
 ## Purpose
 
-V4 must support fifteen features covering registration, checkout and event categorization; this guide specifies each one as config plus the expected behaviour.
+V4 must support sixteen features covering registration, checkout and event categorization; this guide specifies each one as config plus the expected behaviour.
 
 For each gap you get: what it does, which live events need it, the config to set (where there is any), the expected V4 behaviour, and a working reference where one exists.
 
-**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end. Gap 15 requires importing V3 event categories and event-category assignments, exposing them through the events API, and connecting the homepage category slider and events-page filters to that data.
+**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end. Gap 15 requires importing V3 event categories and event-category assignments, exposing them through the events API, and connecting the homepage category slider and events-page filters to that data. Gap 16 requires event-level photo settings, tier-level overrides, conditional upload fields for individual registration, and server-side upload validation and storage.
 
 How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference. Tick it off in the QA checklist at the end.
 
@@ -29,6 +29,7 @@ How to use it: pick a gap, apply the config to the listed event in V4, then comp
 | 13 | Payment return page (cancelled, failed, pending, other issues) | Platform | All event types | — |
 | 14 | Account orders page: paid orders only | Platform | All event types | — |
 | 15 | Homepage category slider and event categorization | Platform categories + event assignments | All event types | [V4 events](https://abir-web-development.up.railway.app/events) · [Music](https://abir-web-development.up.railway.app/events?category=Music) · [Sports](https://abir-web-development.up.railway.app/events?category=Sports) |
+| 16 | Photo required for individual registration | Event default + tier override | Ticket categories with `registrationType: "individual"` | — |
 
 ## Core concepts
 
@@ -566,6 +567,48 @@ V3 already supports event categories, and one event can belong to multiple categ
 - Clearing the category filter returns to the unfiltered events listing.
 - If the selected category has no matching events, show a clear empty state.
 
+## Gap 16 — Photo required for individual registration
+
+V3 includes a **Photo Required** toggle in Event Settings, with a customizable field label such as **Upload your NID** or **Upload your Photo/Selfie**. In V3, this feature applies only when Individual Registration Mode is enabled.
+
+Add this feature to V4, applicable only when the ticket category's `registrationType` is `"individual"`. The event-level setting provides the default, and each ticket tier can override that default to enable or disable photo collection.
+
+**Config — event default and tier override.** The following field names are proposed for V4; map them to the existing V3 settings during migration.
+
+```ts
+// Event Settings
+photoRequired: true,
+photoFieldLabel: "Upload your Photo/Selfie",
+
+// Ticket category / tier
+{
+  id: "vip",
+  name: "VIP",
+  registrationType: "individual",
+  photoRequired: true,
+},
+{
+  id: "general",
+  name: "General",
+  registrationType: "individual",
+  photoRequired: false,
+},
+```
+
+On the ticket category, `photoRequired` is an optional boolean: omit it to inherit the event default, set it to `true` to require an upload, or set it to `false` to hide the upload field. An explicit `false` must override an event default of `true`.
+
+**Expected behaviour**
+
+- Retain the event-level **Photo Required** toggle and customizable field label from V3, including each event's existing values.
+- Add a tier-level control with three choices: **Use event default**, **Enabled**, and **Disabled**.
+- Show and require the upload field only when the category has `registrationType: "individual"` and its effective `photoRequired` setting is enabled.
+- For every other registration type, hide the upload field and do not require a photo, regardless of the event default or tier override.
+- When enabled, use the event's configured label and collect an upload for each attendee registered under that ticket category.
+- When disabled, hide the upload field entirely; do not show it as an optional field.
+- In the example above, VIP attendees must upload a photo, while General attendees do not see the upload field, even though both categories use individual registration.
+- Apply the rule independently for each tier in an order. A photo requirement on one tier must not apply to attendees from another tier where photo collection is disabled.
+- Validate the effective requirement on the server and associate each uploaded file with the correct attendee before proceeding to checkout.
+
 ## Migration and QA checklist
 
 **Econo Carnival Bangladesh Season 01**
@@ -667,6 +710,19 @@ V3 already supports event categories, and one event can belong to multiple categ
 - [ ] Direct links and page refreshes retain the selected category
 - [ ] Changing or clearing the filter updates both the URL and the results
 - [ ] A category with no matching events shows an empty state
+
+**Photo required for individual registration**
+
+- [ ] V3 event-level Photo Required values and custom field labels are retained in V4
+- [ ] Upload field appears only for categories with `registrationType: "individual"`
+- [ ] Tier with no override inherits the event default
+- [ ] Tier enabled override requires an upload even when the event default is disabled
+- [ ] Tier disabled override hides the upload field even when the event default is enabled
+- [ ] Custom labels such as "Upload your NID" and "Upload your Photo/Selfie" appear correctly
+- [ ] Required upload is collected for each attendee in an enabled individual-registration tier
+- [ ] VIP can require uploads while General hides the field in the same event and order
+- [ ] Non-individual categories never show or require an upload, even with photo settings enabled
+- [ ] Server validates the requirement and saves each upload against the correct attendee
 
 ## References
 
