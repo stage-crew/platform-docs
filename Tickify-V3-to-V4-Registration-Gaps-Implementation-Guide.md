@@ -2,11 +2,11 @@
 
 ## Purpose
 
-V4 must support twelve registration and checkout features; this guide specifies each one as config plus the expected behaviour.
+V4 must support fourteen registration and checkout features; this guide specifies each one as config plus the expected behaviour.
 
 For each gap you get: what it does, which live events need it, the config to set (where there is any), the expected V4 behaviour, and a working reference where one exists.
 
-**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end.
+**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end.
 
 How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference. Tick it off in the QA checklist at the end.
 
@@ -26,10 +26,12 @@ How to use it: pick a gap, apply the config to the listed event in V4, then comp
 | 10 | Checkout page (review, coupons, add-on services) | Platform (add-ons TBD) | All event types | [V4 checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001) |
 | 11 | Order confirmation page | Platform | All event types | [V4 confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success) |
 | 12 | Event card: price and Book now | Platform | All event types | — |
+| 13 | Payment return page (cancelled, failed, pending, other issues) | Platform | All event types | — |
+| 14 | Account orders page: paid orders only | Platform | All event types | — |
 
 ## Core concepts
 
-Every setting lives either on the event (applies to all tiers) or on a ticket tier (applies to that tier only). Tier-level config adds to or overrides event-level config. Gaps 10–12 are platform behaviour with no per-event setting (except the open question on add-on services in Gap 10).
+Every setting lives either on the event (applies to all tiers) or on a ticket tier (applies to that tier only). Tier-level config adds to or overrides event-level config. Gaps 10–14 are platform behaviour with no per-event setting (except the open question on add-on services in Gap 10).
 
 | Level | Where it lives | Examples |
 | --- | --- | --- |
@@ -45,14 +47,16 @@ Every setting lives either on the event (applies to all tiers) or on a ticket ti
 
 **Purchase flow.** Every event, of every type, follows the same path:
 
-**Registration form → Checkout page → Payment → Confirmation page**
+**Registration form → Checkout page → Payment → Confirmation page (or Payment return page)**
 
 1. The buyer completes the registration form: event and tier fields, team fields (Gap 1), or every runner's details in the race wizard (Gap 6).
 2. Submitting the form creates an unpaid order and takes the buyer straight to that order's checkout page (`/checkout/<order-id>`). There is no separate "add to cart" step.
 3. On the checkout page the buyer reviews the order, redeems coupons, chooses additional services and pays (Gap 10).
-4. After a successful payment the buyer lands on the confirmation page (Gap 11).
+4. After a successful payment the buyer lands on the confirmation page (Gap 11). If the payment is cancelled, fails, is still pending or hits any other issue, the buyer lands on the payment return page (Gap 13) instead.
 
 If the buyer leaves before paying, the unpaid order stays in their cart (Gap 8) so they can return and complete payment later, within the limits of the order hold setting. Free orders (total of 0) skip the payment step.
+
+**Where orders live.** Unpaid orders are in the cart (Gap 8). Paid and confirmed orders are in the buyer's account at `/profile/orders` (Gap 14). An order is never in both places.
 
 **Regular vs seated tickets.** A regular (general admission) ticket is a quantity from a tier. A seated ticket is a specific seat on the seat map. This distinction drives Gaps 8–9: only seated tickets are ever reserved by an unpaid order.
 
@@ -352,7 +356,7 @@ orderHold: {
 - Submitting the registration form creates an unpaid order. The order appears in the cart immediately, and the buyer is taken straight to its checkout page (see Purchase flow). There is no "add to cart" step.
 - The cart shows one order card per event. Each card opens that order's checkout page (`/checkout/<order-id>`) so the buyer can resume.
 - Because registration comes first, every order has the buyer's email, signed in or not.
-- Paid orders leave the cart.
+- Paid orders leave the cart and appear on the buyer's account orders page (Gap 14).
 - The cart page is always reachable, including when it is empty; an empty cart shows an empty state rather than an error or redirect.
 - **Regular tickets are not reserved by an unpaid order.** Availability is only taken at payment. If a regular tier sells out while an order for it is unpaid, checkout must re-check availability and tell the buyer before payment is attempted, not after.
 - **Seated tickets are reserved** when the order is created, for as long as the hold setting below allows.
@@ -360,11 +364,11 @@ orderHold: {
 **Expected behaviour — Order Hold Timeout enabled**
 
 - The organizer sets the hold duration in minutes. The default is 10, and there is no minimum or maximum.
-- The timer starts when the order is created (registration form submitted). Each order has its own timer. Returning to checkout, applying coupons or choosing add-on services does not reset it. It is enforced on the server, not only in the browser.
+- The timer starts when the order is created (registration form submitted). Each order has its own timer. Returning to checkout, applying coupons, choosing add-on services or a failed payment attempt does not reset it. It is enforced on the server, not only in the browser.
 - Each order card in the cart shows a countdown of the time left to complete payment before the order expires. The checkout page shows the same countdown.
 - When the time runs out, the unpaid order expires and leaves the cart.
 - For seated events, the reserved seats are released and become selectable by other buyers immediately.
-- A payment already in progress when the timer runs out must not be lost: either extend the hold while the payment gateway session is open, or reject and refund. Decide which.
+- A payment already in progress when the timer runs out must not be lost: either extend the hold while the payment gateway session is open, or reject and refund. Decide which. If the order is rejected, the buyer sees that on the payment return page (Gap 13).
 
 **Expected behaviour — Order Hold Timeout disabled**
 
@@ -424,14 +428,14 @@ After submitting the registration form, the buyer goes straight to the checkout 
 
 **Expected behaviour**
 
-- The page lives at `/checkout/<order-id>` and is reached from the registration form, from an order card in the cart, or from the reminder link (Gap 9).
+- The page lives at `/checkout/<order-id>` and is reached from the registration form, from an order card in the cart, from the reminder link (Gap 9), or from "Try again" on the payment return page (Gap 13).
 - **Order review:** shows the event, tiers, quantities (and seats, for seated events) and the details entered on the registration form.
 - **Coupons:** a coupon field validated on the server against each tier's `allowedCouponCodes` (Gap 7). The price summary updates when a code is applied or removed.
 - **Additional services:** the buyer can choose optional services, such as ticket delivery via WhatsApp and a refund guarantee. Selected services appear in the price summary. If WhatsApp delivery is selected, a WhatsApp number is required (prefilled if the registration form collected a phone number).
 - **Hold timer:** when the order hold is enabled, the countdown is shown here. Nothing on this page resets it.
 - **Before payment:** availability of regular tiers is re-checked. If any tier in the order has sold out, the buyer is told and payment is not started.
 - **Payment succeeds:** the buyer goes to the confirmation page (Gap 11) and the order leaves the cart.
-- **Payment fails or is cancelled:** the buyer returns to the checkout page with a clear message. The order stays in the cart, subject to the hold timer.
+- **Payment cancelled, failed, pending or any other issue:** the buyer goes to the payment return page (Gap 13), which shows what happened and what to do next. The order stays in the cart, subject to the hold timer.
 - **Free orders** (total of 0, including after a 100% coupon): no payment step. Confirming the order goes straight to the confirmation page.
 
 **Open questions**
@@ -454,10 +458,10 @@ V4 currently has no order confirmation page. Add one, shown after a successful p
 - The page lives at `/checkout/<order-id>/success`. Layout and content follow the V4 template.
 - It confirms the order ID, event and tickets, and how the tickets will be delivered (including WhatsApp, if chosen at checkout).
 - It is shown only when the server has confirmed the order as paid (or as a completed free registration). The payment gateway's redirect alone is not enough; the page reads the order status from the server.
-- Opening the URL for an unpaid order sends the buyer to that order's checkout page instead.
+- It is used for successful payments only. Cancelled, failed and pending payments, and any other issue, go to the payment return page (Gap 13).
+- Opening the URL for an unpaid order sends the buyer to that order's checkout page instead, or to the payment return page if a payment is still pending.
 - Reloading or reopening the page shows the same confirmation. It never creates a second order or a second charge.
-
-**Open question:** what does the buyer see if the payment gateway has not yet confirmed the payment (pending status)?
+- From this point the order appears on the buyer's account orders page (Gap 14).
 
 ## Gap 12 — Event card: price and Book now
 
@@ -474,6 +478,63 @@ On event cards (wherever events are listed), show **"Starts from <price>"** on t
 - The same layout applies on every event card, wherever event cards appear.
 
 **Open question:** an event with both free and paid tiers has a lowest price of 0. Should its card show "Free" (which may read as the whole event being free) or "Starts from Free"?
+
+## Gap 13 — Payment return page
+
+When a payment does not succeed, the buyer needs to see what happened and what to do next. Add a payment return page for every outcome other than a successful payment: cancelled, failed, pending, or any other issue. Successful payments go to the confirmation page (Gap 11), never to this page.
+
+- **Reference:** none yet. Proposed route: `/checkout/<order-id>/return` (to confirm).
+
+**Config.** None.
+
+**Expected behaviour**
+
+- When the buyer comes back from the payment gateway, the outcome is read from the server's order status (confirmed with the gateway), not from the redirect URL or its parameters. Paid goes to the confirmation page (Gap 11); every other outcome goes to this page.
+- The page shows the order ID, the event, the order amount, and a plain message for the outcome:
+
+| Outcome | What the buyer is told | Next step offered |
+| --- | --- | --- |
+| Cancelled | The payment was cancelled and no money was taken. | Try again, or go to cart |
+| Failed or declined | The payment did not go through, with the reason if the gateway gives one. | Try again, or go to cart |
+| Pending | The payment is still being confirmed; do not pay again. | None while pending; the page updates when the status changes |
+| Order expired during payment | The order hold ran out, and how any amount taken will be refunded (only if Gap 8 decides "reject and refund"). | Back to the event to register again |
+| Tickets sold out during payment | The tickets are no longer available, and how any amount taken will be refunded. | Back to the event |
+| Any other issue | Something went wrong and the order is not confirmed. | Try again, or contact support |
+
+- "Try again" reopens the same order's checkout page (Gap 10) with the registration details, coupons and add-on services kept, so nothing has to be re-entered. It is shown only while the order can still be paid.
+- When the order hold is enabled, the countdown is shown on this page too. A cancelled or failed payment does not reset the timer.
+- After a cancelled, failed or pending outcome, the order stays in the cart (Gap 8) unless it has expired. None of these orders appear on the account orders page (Gap 14).
+- While a payment is pending, "Try again" is not offered and the order's card in the cart shows the pending status instead of opening checkout, so the buyer cannot be charged twice for the same order. When the status resolves, the page moves to the confirmation page (paid) or to the failed state.
+- Reloading or reopening the page shows the current status. It never starts a new payment.
+- Like the checkout and confirmation pages, it must not expose an order to anyone who changes the order ID in the URL.
+
+**Open questions**
+
+- Which payment gateways V4 uses, and how each gateway's return codes map to the outcomes above.
+- How long can a payment stay pending before it is treated as failed, and does a pending payment extend the order hold? This ties into the Gap 8 decision on payments in progress at expiry.
+- What refund wording and timelines should the page show, and who provides the text?
+- Confirm the route for this page.
+
+## Gap 14 — Account orders page: paid orders only
+
+The orders page in the buyer's account (`/profile/orders`) lists only paid and confirmed orders. Orders in any other state are not shown there. Unpaid orders are found in the cart (Gap 8) instead.
+
+- **Page:** `/profile/orders`
+
+**Config.** None.
+
+**Expected behaviour**
+
+- Listed: orders the server has confirmed as paid, plus confirmed free registrations (total of 0), which have nothing to pay.
+- Not listed: unpaid orders (pending payment), payments still pending confirmation, and cancelled, failed or expired orders.
+- An order appears as soon as it is confirmed, at the same point the confirmation page (Gap 11) is shown.
+- The filter is applied on the server: the orders API returns only confirmed orders, rather than the page hiding the others in the browser.
+- When the buyer has no confirmed orders, the page shows an empty state rather than listing unpaid ones.
+
+**Open questions**
+
+- Refunded orders (for example under the refund guarantee): do they stay on the page with a "Refunded" label, or disappear?
+- Orders placed as a guest with the same email: do they appear here once the buyer signs in?
 
 ## Migration and QA checklist
 
@@ -503,13 +564,13 @@ On event cards (wherever events are listed), show **"Starts from <price>"** on t
 
 **Purchase flow and checkout**
 
-- [ ] Every event follows Registration form → Checkout → Payment → Confirmation
+- [ ] Every event follows Registration form → Checkout → Payment → Confirmation (or Payment return page)
 - [ ] Submitting the registration form (including team and runner details) creates an unpaid order and opens its checkout page
 - [ ] Checkout shows the order review, coupon field, additional services and price summary
 - [ ] Coupons are validated on the server; in a mixed order they apply only to tiers that allow them
 - [ ] Selected add-on services appear in the price summary; WhatsApp delivery requires a number
 - [ ] A regular tier that sells out while its order is unpaid is caught at checkout, before payment
-- [ ] Failed or cancelled payment returns to checkout with a message; the order stays in the cart
+- [ ] Cancelled, failed or pending payment lands on the payment return page; the order stays in the cart
 - [ ] Free orders skip payment and reach the confirmation page
 
 **Cart and hold timeout**
@@ -518,11 +579,11 @@ On event cards (wherever events are listed), show **"Starts from <price>"** on t
 - [ ] Cart shows one order card per event, each opening its checkout page; empty cart shows an empty state
 - [ ] Unpaid regular tickets do not reduce `remaining`
 - [ ] Seats are reserved when the order is created; other buyers cannot select them
-- [ ] Hold defaults to 10 minutes; timer starts when the order is created and is not reset by revisiting checkout, coupons or add-ons
+- [ ] Hold defaults to 10 minutes; timer starts when the order is created and is not reset by revisiting checkout, coupons, add-ons or a failed payment
 - [ ] Hold enabled: countdown shown on each order card and on checkout; order expires at the set minutes; seats released immediately
 - [ ] Hold enabled: payment in progress at expiry is handled per the decided rule
 - [ ] Hold disabled: no countdown; order and seat reservations persist until the event ends, then expire
-- [ ] Paid orders leave the cart
+- [ ] Paid orders leave the cart and appear on `/profile/orders`
 
 **Abandoned-cart reminders**
 
@@ -535,9 +596,28 @@ On event cards (wherever events are listed), show **"Starts from <price>"** on t
 
 **Confirmation page**
 
-- [ ] Confirmation page shown after successful payment or free registration, matching the V4 template
-- [ ] Page reads order status from the server; an unpaid order's success URL redirects to its checkout
+- [ ] Confirmation page shown only after successful payment or free registration, matching the V4 template
+- [ ] Page reads order status from the server; an unpaid order's success URL redirects to its checkout, or to the payment return page if a payment is pending
 - [ ] Reloading the page does not create a second order or charge
+
+**Payment return page**
+
+- [ ] Every non-successful gateway return lands on the payment return page; successful ones land on the confirmation page
+- [ ] Outcome comes from the server's order status, not the redirect URL
+- [ ] Cancelled, failed, pending, expired, sold-out and other issues each show their own message and next step
+- [ ] "Try again" reopens the same order's checkout with registration details, coupons and add-ons kept; hidden when the order can no longer be paid
+- [ ] Pending: no "Try again", and the cart card does not open checkout; the page moves to confirmation or the failed state when the status resolves
+- [ ] Hold countdown shown and not reset by a cancelled or failed payment
+- [ ] Reloading the page never starts a new payment
+- [ ] Changing the order ID in the URL does not reveal another buyer's order
+
+**Account orders page**
+
+- [ ] `/profile/orders` lists only paid and confirmed orders (including confirmed free registrations)
+- [ ] Pending payment, payment pending confirmation, cancelled, failed and expired orders do not appear
+- [ ] A newly paid order appears straight after payment
+- [ ] Filtering is done on the server; the orders API does not return unconfirmed orders
+- [ ] A buyer with no confirmed orders sees an empty state
 
 **Event cards**
 
@@ -557,4 +637,4 @@ Full list of event settings and registration modes: [Tickify event details and r
 
 Reference builds: [creator-tech-expo](https://abir-web-development.up.railway.app/events/creator-tech-expo), [food-carnival](https://abir-web-development.up.railway.app/events/food-carnival), [dhaka-marathon](https://abir-web-development.up.railway.app/events/dhaka-marathon).
 
-Checkout references: [cart](https://abir-web-development.up.railway.app/cart), [checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001), [confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success).
+Checkout references: [cart](https://abir-web-development.up.railway.app/cart), [checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001), [confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success). Payment return page and account orders page: no reference yet.
