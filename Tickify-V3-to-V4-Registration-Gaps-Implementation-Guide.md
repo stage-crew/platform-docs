@@ -2,11 +2,11 @@
 
 ## Purpose
 
-V4 must support fourteen registration and checkout features; this guide specifies each one as config plus the expected behaviour.
+V4 must support fifteen features covering registration, checkout and event categorization; this guide specifies each one as config plus the expected behaviour.
 
 For each gap you get: what it does, which live events need it, the config to set (where there is any), the expected V4 behaviour, and a working reference where one exists.
 
-**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end.
+**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end. Gap 15 requires importing V3 event categories and event-category assignments, exposing them through the events API, and connecting the homepage category slider and events-page filters to that data.
 
 How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference. Tick it off in the QA checklist at the end.
 
@@ -28,6 +28,7 @@ How to use it: pick a gap, apply the config to the listed event in V4, then comp
 | 12 | Event card: price and Book now | Platform | All event types | — |
 | 13 | Payment return page (cancelled, failed, pending, other issues) | Platform | All event types | — |
 | 14 | Account orders page: paid orders only | Platform | All event types | — |
+| 15 | Homepage category slider and event categorization | Platform categories + event assignments | All event types | [V4 events](https://abir-web-development.up.railway.app/events) · [Music](https://abir-web-development.up.railway.app/events?category=Music) · [Sports](https://abir-web-development.up.railway.app/events?category=Sports) |
 
 ## Core concepts
 
@@ -536,6 +537,35 @@ The orders page in the buyer's account (`/profile/orders`) lists only paid and c
 - Refunded orders (for example under the refund guarantee): do they stay on the page with a "Refunded" label, or disappear?
 - Orders placed as a guest with the same email: do they appear here once the buyer signs in?
 
+## Gap 15 — Homepage category slider and event categorization
+
+V3 already supports event categories, and one event can belong to multiple categories. Pull the existing categories and each event's category assignments from V3 into V4, and use that data for both the homepage category section and the events-page category filters.
+
+- **References:** [V4 events](https://abir-web-development.up.railway.app/events) · [Music filter](https://abir-web-development.up.railway.app/events?category=Music) · [Sports filter](https://abir-web-development.up.railway.app/events?category=Sports)
+
+**Data — V3 categories and event assignments.**
+
+- Import the existing category list from V3 rather than creating a separate hardcoded list in V4.
+- Preserve each event's existing category assignments, including events assigned to more than one category.
+- Keep categories as a shared platform list, with multiple category assignments supported per event.
+- Use the same category data and event assignments for the homepage slider and the events-page filters.
+
+**Expected behaviour — homepage category section**
+
+- Keep the homepage category slider and populate it with the categories pulled from V3.
+- Clicking a category opens the events page with that category selected through the `category` query parameter.
+- For example, clicking **Music** opens `/events?category=Music`; clicking **Sports** opens `/events?category=Sports`.
+- Build category links from the actual category values and URL-encode them where necessary.
+
+**Expected behaviour — events page**
+
+- `/events` keeps its category filters, populated from the same V3 category list.
+- Opening `/events?category=<category>` directly selects that category and shows only events assigned to it.
+- An event assigned to multiple categories appears in the results for each of those categories, once per result list.
+- Changing the category filter updates the URL and the displayed events; refreshing a filtered URL retains the selected category.
+- Clearing the category filter returns to the unfiltered events listing.
+- If the selected category has no matching events, show a clear empty state.
+
 ## Migration and QA checklist
 
 **Econo Carnival Bangladesh Season 01**
@@ -625,6 +655,18 @@ The orders page in the buyer's account (`/profile/orders`) lists only paid and c
 - [ ] Lowest price includes sold-out and not-yet-on-sale tiers
 - [ ] Free events show "Free"
 - [ ] Sold-out events show a disabled "Sold out" button
+
+**Homepage categories and event categorization**
+
+- [ ] Category list and event-category assignments are imported from V3
+- [ ] One event can retain multiple categories and appears under each assigned category
+- [ ] Homepage category slider uses the imported categories
+- [ ] Clicking a homepage category opens `/events?category=<category>` with the correct filter selected
+- [ ] Events-page category filters use the same category list as the homepage slider
+- [ ] Music and Sports reference URLs show only events assigned to the selected category, without duplicates
+- [ ] Direct links and page refreshes retain the selected category
+- [ ] Changing or clearing the filter updates both the URL and the results
+- [ ] A category with no matching events shows an empty state
 
 ## References
 
