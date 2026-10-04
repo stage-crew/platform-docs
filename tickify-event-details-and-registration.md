@@ -10,7 +10,7 @@ flowchart LR
   S --> L["registrationLayout<br/>7 layouts"]
   S --> M["registrationMode<br/>8 modes"]
   S --> B["Booleans<br/>onPageRegistration<br/>collectIndividualInformation<br/>showClusterFilter"]
-  S --> O["Overlays on any mode<br/>preRegistration · theme · donation"]
+  S --> O["Overlays on any mode<br/>preRegistration · theme · donation<br/>additionalServices"]
   S --> MC["Mode configs<br/>team · race · tournament · application"]
   C --> CL["cluster"]
   C --> BI["bundleItems"]
@@ -37,17 +37,21 @@ settings: createEventSettings({
 
 These seven keys are required by `EventSettingsConfig`. Every other setting has a default and is optional:
 
-| Setting                   | Purpose                                                                    |
-| ------------------------- | -------------------------------------------------------------------------- |
-| `clusterSelection`        | Whether clusters filter a list or gate it. Default `"filter"`.             |
-| `priceLabel`              | What the price on a summary card is the price *of*. Default derived.       |
-| `donation`                | Placement 1 when the mode is `donation`, placement 2 on any other.         |
-| `preRegistration`         | An announcement before the sale. Not a mode config; any mode may have one. |
-| `theme`                   | One organizer hex and the face it is set in. Not a mode config either.     |
-| `applicationRegistration` | Questions, attachments, capacity and payment timing for `application`.     |
-| `raceRegistration`        | Waiver, age categories, waves and entrant rules for `race`.                |
-| `teamRegistration`        | Sizes and field defaults for `team`.                                       |
-| `tournamentRegistration`  | Roster, divisions, roles and documents for `tournament`.                   |
+| Setting                   | Purpose                                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `clusterSelection`        | Whether clusters filter a list or gate it. Default `"filter"`.                                            |
+| `priceLabel`              | What the price on a summary card is the price *of*. Default derived; see below.                           |
+| `donation`                | Placement 1 when the mode is `donation`, placement 2 on any other.                                        |
+| `preRegistration`         | An announcement before the sale. Not a mode config; any mode may have one.                                |
+| `theme`                   | One organizer hex and the face it is set in. Not a mode config either.                                    |
+| `additionalServices`      | Services sold beside a ticket (`refundGuarantee`, `whatsappTickets`), each with its own `charge`.         |
+| `platformFeeEnabled`      | Whether the platform fee applies. Absent means it does; `false` for organizers not permitted to charge it. |
+| `applicationRegistration` | Questions, attachments, capacity and payment timing for `application`.                                    |
+| `raceRegistration`        | Waiver, age categories, waves and entrant rules for `race`.                                               |
+| `teamRegistration`        | Sizes and field defaults for `team`.                                                                      |
+| `tournamentRegistration`  | Roster, divisions, roles and documents for `tournament`.                                                  |
+
+`createEventSettings` also derives `isRegistrationOpen` from `status` (`live`, `ongoing` and `upcoming` are open) unless the event sets it, which is why an announced event states it explicitly.
 
 `priceLabel` is a string the organizer sets, not a value derived from the mode. "Tickets from" is wrong as soon as an event is not selling tickets, and the mode cannot predict the right words: one organizer wants "Entry from", another "Registration from", "Suggested", or nothing, for reasons unrelated to the mode.
 
@@ -59,6 +63,32 @@ Earlier drafts used snake_case names that are now obsolete:
 | `on_page_registration`     | `settings.onPageRegistration`           |
 | `individual_info_required` | `settings.collectIndividualInformation` |
 | `show_cluster_filter`      | `settings.showClusterFilter`            |
+
+### What the price on a summary card says
+
+`resolveEventPricing(event, categories)` answers what a summary card or sticky bar prints about price, as `{ amount, display, label }`. The no-price path is explicit rather than a fallback that happens to produce something.
+
+| Situation                                      | `display`                                                                  | `label`                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------- |
+| Nothing priced (`getLowestCategoryPrice` null) | The organizer's `priceRange`, or nothing                                   | `priceLabel`, or empty          |
+| The lowest price is 0                          | `"Free"`                                                                   | `priceLabel`, or `"Admission"`  |
+| Anything else                                  | The organizer's `priceRange` if set, else the lowest price with the event's currency symbol | `priceLabel`, or `"Tickets from"` |
+
+`getLowestCategoryPrice` skips donation lines and any line that admits nobody, because a donation's price is a placeholder zero for an amount the giver chooses, and counting it made Winter Charity Gala advertise "Free" beside an ৳8,000 seat. It returns `null` for an empty list instead of `Math.min()`'s `Infinity`, which formats as "৳Infinity" rather than failing. It reads `category.price` only, so the "from" figure excludes any platform fee or additional service.
+
+### Additional services and the platform fee
+
+```ts
+additionalServices?: {
+  refundGuarantee?: { charge: number };
+  whatsappTickets?: { charge: number };
+};
+platformFeeEnabled?: boolean; // absent = the fee applies
+// TicketCategory
+platformFee?: number; // per ticket, for this tier
+```
+
+`additionalServices` follows the same rule as `preRegistration` and `playerDocuments`: presence is the flag, so the organizer's toggle adds or removes the key and no boolean sits beside a charge to disagree with it. A category's `platformFee` applies at checkout unless `settings.platformFeeEnabled` is `false`. This module only carries the configuration. No sample event sets any of the three, so nothing in the shipped data exercises them.
 
 ## Routes
 
@@ -87,6 +117,42 @@ flowchart TD
   EP -.->|"settings.donation, placement 2"| DO
 ```
 
+## Event identity, time zone and payment rails
+
+Three fields on `EventDetail` are not settings. They say which event a view model is, where it is run, and what the deployment behind it can charge on. Each exists because a default was quietly doing the job of a fact.
+
+| Field          | Type                  | Purpose                                                                                  |
+| -------------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| `timezone`     | `string`, required    | The IANA zone the event is run in, for example `"Asia/Dhaka"`.                           |
+| `occurrenceId` | `string`, optional    | The date this view model's availability answers for.                                     |
+| `paymentRails` | `readonly string[]`, required | The payment rails this deployment can actually charge on.                        |
+
+### `timezone` is required, and nothing defaults it
+
+A surface that draws an instant has to be told which clock to draw it on. Seventeen formatters across the app used to answer that with `timeZone: "Asia/Dhaka"` written into them: right by accident, because every event on the platform is currently in Dhaka, and wrong by construction. An optional field would not have fixed it. The read side would have grown `event.timezone ?? "Asia/Dhaka"` and the literal would have survived one layer down.
+
+The API has carried the zone the whole time: `Event`, `Occurrence` and `Venue` each own one in `contract.prisma`, and `catalogue.routes.ts` puts it on the wire. `toEventDetail` reads it rather than choosing one.
+
+Everything in this module that formats or compares calendar time takes the zone as an argument:
+
+- `formatEventInstant(value, timeZone)` words the early-access sentence ("until general sale begins on …").
+- `getAgeOn` and `resolveAgeCategory` count an entrant's age on the event's calendar (see *Age is computed on the event's calendar*).
+- Both lean on `zonedFormatter` and `zonedCalendarParts` from `src/lib/event-time.ts`. `zonedFormatter` memoises, so passing the zone costs nothing per call.
+
+The fixture events set `timezone` to `FIXTURE_TIMEZONE`, which is `"Asia/Dhaka"`. That is a *fixture value*, not a formatting decision: every fixture names a real Bangladeshi venue, so the zone is a fact about where the fictional event happens, in the same way its address is. A test that needs a non-Dhaka event builds its own rather than editing a shipped one, which would assert that Dhanmondi Turf is in London. The fallback detail built from a browse listing forwards the listing's zone.
+
+### `occurrenceId` is a second dimension of session identity, not part of the slug
+
+Tier availability on API-backed events is keyed `(occurrenceId, tierId)`, so one view model describes one date. The field is optional because the shipped fixtures are single-date and name no occurrence.
+
+It is deliberately **not** part of the slug. `slug` is the public URL, the `registrationHref` target, the theme scope and the fixture lookup key, and a compound value would break all four. Instead `getRegistrationSession` keys on both, so two dates of one event hold two carts rather than sharing the first date's categories.
+
+### `paymentRails` is a property of the process, not of the event
+
+An identically configured event serves a different list where a rail has no credentials, which is why the field sits beside `occurrenceId` and not in `settings`, whose every member is an `EventSettings` column. It comes from the catalogue read's `paymentRails`.
+
+Empty is a real answer rather than a missing one: a deployment with no gateway configured can complete no payment, and the registration panel refuses instead of offering a rail that cannot be honoured. Every shipped sample event, and the fallback detail, sets `[]`.
+
 ## Event detail templates
 
 | Template   | Intended use                                                    |
@@ -98,7 +164,23 @@ flowchart TD
 | `campaign` | Fundraising presentation with goal, progress and story.         |
 | `race`     | Course details, distances, start times and race-day schedule.   |
 
-Events without a custom detail record receive a fallback template based on their browse categories.
+Events without a custom detail record receive a fallback detail built from their browse listing. Its template follows the browse categories: theatre, comedy, culture or art gives `split`; conference, technology or network gives `agenda`; anything else gives `hero`. It is a `single`-mode, `sidebar` event with one category, "General Admission" or "Free RSVP" when the price is zero. That category has 50 places while the listing is `live` or `upcoming` and is sold out otherwise. The status comes from the listing.
+
+## Event media
+
+Every piece of event media has one shape and lives in one of two slots.
+
+```ts
+type EventMediaItem = { type: "image" | "video"; src: string };
+type EventMedia = EventMediaItem[]; // a single piece of media is a list of one
+
+content: { bannerMedia: EventMedia; thumbnailMedia: EventMedia }
+```
+
+- Empty means no media, so there is no `null` for a caller to also check.
+- There is no mobile variant and no video poster: the same media serves every breakpoint, and a video covers its own first frame by autoplaying muted.
+- Open Graph wants a still, and a slot can hold a video, so `getEventShareImage` takes the first item that is actually an image, looking at the banner slot and then the thumbnail slot, rather than whatever is first in the banner.
+- Aarong's Watch Party is the only sample event with video, in both slots.
 
 ## Registration layouts
 
@@ -151,13 +233,15 @@ There is no radius key. Only `rounded-sm/md/lg/xl` resolve to `--radius`, and th
 
 The palette is derived in TypeScript, not CSS. `color-mix()` and relative colours would put every value where no assertion can read it, and an unmeasurable palette is exactly what this feature learned not to ship. The maths is HSL (same hue and saturation, different lightness). HSL is not perceptually uniform, which does not matter: every value is measured against a contrast bar before use, so the search corrects for the colour space.
 
+`resolveEventTheme` returns `null`, and the event renders unthemed, when there is no accent or the accent is not a 3- or 6-digit hex. A present-but-invalid accent is reported by `assertEventThemeContrast`.
+
 | Derived | Rule |
 | ------- | ---- |
 | `accent` | The authored hex, unchanged, in both schemes. |
-| `accentForeground` | Near-black or near-white, whichever reads better on the accent. One value, because the accent does not move. |
+| `accentForeground` | Near-black (`#160d0a`) or near-white (`#fbf7f5`), whichever reads better on the accent. One value, because the accent does not move. |
 | `background` | The canvas, a low-saturation tint of the hue. In light mode it is raised until it clears `#f4e9e1`. |
 | `surface` | The cards, lifted off the canvas in both schemes: same hue, higher lightness. |
-| `accentBorder` | A hairline of the same hue, present only in the scheme where the fill cannot reach 3:1 against its ground. `null` (resolving to `transparent`) everywhere else. |
+| `accentBorder` | A hairline of the same hue, present only in the scheme where the fill cannot reach 3:1 against its ground. `null` (resolving to `transparent`) everywhere else. The search aims at 3.1:1, a shade over the bar, so a hairline that only just qualifies cannot fail the assertion on a rounding difference. |
 | `border`, `input`, `ring` | Chrome. `input` is searched until it clears 3:1 against the cards, which `--control-border` documents as a requirement. `ring` is the accent, since a focus ring is the one piece of chrome that should look chosen. |
 | `muted`, `mutedForeground`, `secondary`, `secondaryForeground` | Chips and secondary badges, with text searched until it keeps 4.5:1 on its own wash. |
 
@@ -218,11 +302,11 @@ Dialogs are the exception to inheritance, because they are portaled to `document
 
 ### Assertions and the sweep
 
-`assertEventThemeContrast` runs outside production and checks three things per scheme: accent against its label at 4.5:1, and accent against both canvas and cards at 3:1. Each failure names its scheme, because "passes light, fails dark" is the normal shape of the answer and an averaged verdict would hide it.
+`assertEventThemeContrast` runs outside production. It checks the accent against its label at 4.5:1 once, since neither moves between schemes, and then, per scheme, the accent against the derived canvas and cards at 3:1. Each fill failure names its scheme, because "passes light, fails dark" is the normal shape of the answer and an averaged verdict would hide it.
 
 The two levels mean different things. `console.error` is a colour nobody can use: text under 4.5:1, or a fill with no edge any hairline can carry. `console.warn` is the derivation doing its job: the accent kept, an edge drawn around it. They shared `console.error` until a correctly behaving theme showed up in the dev overlay looking like a crash.
 
-`THEME_SURFACES` holds the two hexes the assertion measures against, because a constants module cannot read a computed stylesheet. That is a second copy of a fact, so `theme-surfaces.test.ts` pins it against `globals.css`. A designer who moves `--paper` or `--pine-n60` gets a failure naming both files instead of a check that silently measures against a colour the application no longer paints.
+The assertion measures the derived `surface` and `background` of the scheme being checked, because those are what a themed subtree actually paints: `--surface` and `--background` are redefined there. `THEME_SURFACES` still holds the application's own two hexes (`--paper` and `--pine-n60`), a second copy of a fact that a constants module cannot derive from a computed stylesheet, and `theme-surfaces.test.ts` pins it against `globals.css`, so a designer who moves either gets a failure naming both files. Within `event-details-data.ts` nothing reads it any more.
 
 `scripts/theme-sweep.ts` drives headless Edge over the DevTools protocol and walks the event subtree comparing **computed** colours against the application palette and the theme's values. The first version read class lists, which cannot see through a primitive: fields painting `dark:bg-surface` looked correct in every grep.
 
@@ -315,6 +399,8 @@ teamRegistration: {
 }
 ```
 
+Where neither the event nor the category sets a size, the minimum is 2 and the maximum is the category's `maxPerOrder`. The minimum is floored at 1 whatever is configured.
+
 Event and category fields with `scope: "order"` merge into team fields; `scope: "attendee"` fields merge into participant fields. These defaults belong to one event, and a ticket category may provide its own `teamRegistration`.
 
 **Override resolution** is implemented in `resolveTeamRegistration` and reused by every mode with both event and category configuration:
@@ -344,7 +430,7 @@ For marathons, cycling events, triathlons and any timed event where every entran
 
 - A distance is a cluster; the entry types within it are ticket categories, each with its own price, availability and per-order limit
 - The distance carries gun time and cut-off, because General, Student and Member entries into one 10K share both
-- Age category is derived from date of birth and shown live as the entrant types
+- Age category is derived from date of birth, counted on the event's own calendar, and shown live as the entrant types
 - Waves are optional and have capacity independent of category availability
 - A versioned waiver must be accepted before checkout
 - An optional relay variant collects a roster instead of one participant
@@ -356,13 +442,14 @@ flowchart TD
   D1 --> C1["General"]
   D1 --> C2["Student"]
   D1 --> C3["Member"]
+  D1 --> C3b["Member Elite"]
   D1 --> C4["Foreigner"]
   D2 --> C5["Entry types..."]
   EV --> W["Waves, optional<br/>own capacity"]
   W -.-|"narrows start times,<br/>never closes a distance"| D1
 ```
 
-Distances are clusters because one distance sells several entry types. Half Marathon General, Student, Member and Foreigner are four prices for one race that starts and closes together, so start time and cut-off belong to the distance instead of being written four times.
+Distances are clusters because one distance sells several entry types. Half Marathon General, Student, Member, Member Elite and Foreigner are five prices for one race that starts and closes together, so start time and cut-off belong to the distance instead of being written five times.
 
 ```ts
 export type TicketCluster = {
@@ -375,7 +462,7 @@ export type TicketCluster = {
 };
 ```
 
-Both race shapes ship. Dhaka Marathon stages its five distances behind `clusterSelection: "required"` and sets `allowWaveSelection: false` with no `waves`, because the organizer assigns them. Dhaka Cycling Challenge lists its distances in a catalog and offers three start waves, so a rider picks a distance and a time.
+Both race shapes ship. Dhaka Marathon stages its four distances (Half Marathon, 10K, 5K Fun Run and Marathon Relay) behind `clusterSelection: "required"` and sets `allowWaveSelection: false` with no `waves`, because the organizer assigns them. Dhaka Cycling Challenge lists its distances in a catalog and offers three start waves, so a rider picks a distance and a time.
 
 `collectIndividualInformation` is ignored and treated as `true`: every admission is a named entrant.
 
@@ -414,7 +501,7 @@ export type RaceRegistrationConfig = {
 
 Standard participant fields, all `scope: "attendee"`: date of birth, gender, nationality, bib name, T-shirt size, club affiliation, estimated finish time, emergency contact name and phone, relationship to entrant, medical conditions, blood group, and the waiver checkbox.
 
-Two behaviours need logic rather than plain fields. Age category is computed from date of birth against `ageCalculatedOn` and shown immediately so the entrant can confirm it. Wave capacity decrements separately from category `remaining`, so a preferred wave can be full while its distance is still open.
+Two behaviours need logic rather than plain fields. Age category is computed from date of birth against `ageCalculatedOn`, in the event's zone, and shown immediately so the entrant can confirm it. Wave capacity decrements separately from category `remaining`, so a preferred wave can be full while its distance is still open.
 
 ### `tournament`
 
@@ -537,7 +624,7 @@ The status route is the point of this mode. Without `/events/[slug]/application/
 
 **A track is a ticket category.** Programmes that vary questions by track, strand or intake use the categories the event already has: a track has a price payable on approval, a capacity and a description, which is a category. Its order-scoped `registrationFields` merge into `applicationFields` when chosen. One track is context and asks nothing; two or more produce a chooser.
 
-`capacity` and a track's `remaining` answer different questions and both are kept: the first caps the whole programme, the second allocates within one track, so Photography can close while Film stays open. `assertTrackCapacity` throws outside production when allocations exceed the cap, because two numbers describing one pool drift silently.
+`capacity` and a track's `remaining` answer different questions and both are kept: the first caps the whole programme, the second allocates within one track, so Photography can close while Film stays open. `assertTrackCapacity` throws outside production when allocations exceed the cap, because two numbers describing one pool drift silently. It only runs with two or more tracks: a single track is context, not an allocation.
 
 ### `donation`
 
@@ -589,7 +676,7 @@ export type DonationConfig = {
 
 | # | Shape | Turned on by |
 | - | ----- | ------------ |
-| 1 | Donation-only event | `registrationMode: "donation"`, `amount` layout, `campaign` template. Ticket categories unused. |
+| 1 | Donation-only event | `registrationMode: "donation"`, `amount` layout, `campaign` template. Ticket categories unused. `isDonationOnlyEvent` is the predicate: the mode is `donation` *and* the event has no categories. |
 | 2 | **Donate action on a ticketed event** | `settings.donation`. A donate action sits beside the ticket CTA and leads to `/events/[slug]/donate`. The ticket flow is untouched. |
 | 3 | Donation as a ticket category | `isDonation: true` with `admits: false` on a category. |
 | 4 | Inline donation in the cart or lead form | `settings.donation.inline: true`. Renders below the order questions and above the total. |
@@ -630,6 +717,8 @@ tournamentRegistration?: TournamentRegistrationOverride;
 
 It does not keep them out of the order. **Emptiness and validity are a count of lines; the admission count is a count of people.** An order of one donation holds something and admits nobody. A donation-only order on a ticketed event is valid and proceeds with the lead form (see *A donation-only order is a valid order*).
 
+`isOpenAmountLine(category)` names the shape: `isDonation` or `admits: false`, a line with no inventory and no fixed price. A card that does not consult it renders "Free" and a remaining count for something that has neither, so anywhere a line is priced or counted asks it first.
+
 ### Resolution rules
 
 | Condition                                   | Result                                    |
@@ -654,40 +743,57 @@ Only two places read `state` directly, both for pre-registration: `pre_registrat
 
 `now` is a parameter, not a clock read, so a server render and its hydration get the same instant. Note the consequence: `/events/[slug]` is prerendered, so a server render happens at **build** time. Time-dependent states therefore resolve on the client. Do not thread `now` down from the page, or every announced event freezes at the moment CI ran.
 
+`ended` is now one of those time-dependent states, because an event's end date can produce it. A server render defaults `now` to the build instant, so a page prerendered before an event's end date reads as selling until something with a real clock resolves it again.
+
 ### Precedence
 
 ```mermaid
 flowchart TD
-  A(["getEventRegistrationAvailability"]) --> S1{"settings.status is cancelled,<br/>postponed, ended, completed,<br/>draft or sold_out?"}
+  A(["getEventRegistrationAvailability"]) --> S1{"settings.status is cancelled,<br/>postponed, draft or sold_out?"}
   S1 -- yes --> R1["That status answers alone"]
-  S1 -- no --> S2{"getMissingModeConfigKey<br/>finds a missing config?"}
+  S1 -- no --> SE{"status is ended or completed,<br/>or now is at or past ends?"}
+  SE -- yes --> RE["ended"]
+  SE -- no --> S2{"getMissingModeConfigKey<br/>finds a missing config?"}
   S2 -- yes --> R2["unavailable"]
   S2 -- no --> S3{"mode is application?"}
   S3 -- yes --> R3["getApplicationAvailability"]
-  S3 -- no --> S4{"No categories on sale?"}
+  S3 -- no --> S4{"No categories on sale,<br/>and mode is not donation?"}
   S4 -- "yes, a tier still to be announced" --> R4a["coming_soon"]
   S4 -- "yes, nothing pending" --> R4b["sold_out<br/>does not reopen as a waiting list"]
   S4 -- no --> S5{"preRegistration present<br/>and sale not yet open?"}
-  S5 -- yes --> R5["pre_registration or early_access"]
+  S5 -- yes --> R5["pre_registration or early_access<br/>a closed or unavailable list falls through"]
   S5 -- no --> R6["isRegistrationOpen,<br/>then the ordinary open states"]
 ```
 
-1. The `settings.status` switch. `cancelled`, `postponed`, `ended`, `completed`, `draft` and `sold_out` answer first and alone.
-2. `getMissingModeConfigKey`: a mode with no configuration has no form to draw, so it reports `unavailable` instead of crashing.
-3. The `application` branch, delegating to `getApplicationAvailability`.
-4. An empty category list, and *why* it is empty. A pending tier reads `coming_soon`; nothing pending reads `sold_out`.
-5. Pre-registration, if the key is present and the sale has not opened.
-6. `isRegistrationOpen`, then the ordinary open states.
+1. The `settings.status` switch. `cancelled`, `postponed`, `draft` and `sold_out` answer first and alone.
+2. An event that is over: status `ended` or `completed`, or `now` at or past `ends`.
+3. `getMissingModeConfigKey`: a mode with no configuration has no form to draw, so it reports `unavailable` instead of crashing.
+4. The `application` branch, delegating to `getApplicationAvailability`.
+5. An empty category list, and *why* it is empty. A pending tier reads `coming_soon`; nothing pending reads `sold_out`. A `donation` event skips this step, because a donation has nothing to run out of and a campaign with no tickets is not sold out.
+6. Pre-registration, if the key is present and the sale has not opened.
+7. `isRegistrationOpen`, then the ordinary open states (`Donations open` for a donation event, `Registration open` otherwise).
+
+### An event that is over is over, whatever its status says
+
+Two facts produce the same verdict, so they ask together and the words are written once. `status` is served, and a served status is a row something has to move. When nothing moves it, a finished event keeps whatever it was last set to, usually `live`, and every branch below reads that as an event with a sale to run, down to the default `open` that draws a buy button on a night that happened months ago. The `now` parameter exists so the page's own clock can be a second line of defence against exactly that, and win.
+
+It sits below the four statuses in step 1, and that placement is the precedence decision. `cancelled`, `postponed`, `draft` and `sold_out` are more specific facts about why an event is unavailable than "its end date has passed", and each of them outlives that date: a cancelled event is still cancelled a year later, and telling its reader "this event has ended" is both the vaguer answer and the wrong one. So the end date only catches the statuses that would otherwise fall through to a sale: `live`, `upcoming` and `ongoing`.
+
+The date comparison is guarded with `Number.isFinite`, not a null check. `ends` is a required field, so the case to defend against is an empty or unparseable value arriving from an adapter. An event whose end cannot be read cannot be judged past it and falls through untouched: unknown is not ended.
 
 ### `isRegistrationOpen` and `registrationOpensAt` describe one fact
 
-The boolean says whether the event is selling; the timestamp says when it starts. Nothing flips the boolean when the timestamp passes, so they can disagree. `assertPreRegistrationWindow` reports both directions outside production: the boolean true while the sale is still in the future, and the boolean false after the sale date has passed. The second is what an announced event drifts into when its dates are left behind, and it renders "Registration opens soon" on a date already gone.
+The boolean says whether the event is selling; the timestamp says when it starts. Nothing flips the boolean when the timestamp passes, so they can disagree. `createEventSettings` derives the boolean from `status` unless the event sets it, which makes the disagreement easy to author by leaving the default. `assertPreRegistrationWindow` reports both directions outside production: the boolean true while the sale is still in the future, and the boolean false after the sale date has passed. The second is what an announced event drifts into when its dates are left behind, and it renders "Registration opens soon" on a date already gone.
 
 The assertion is a marker, not the fix. Deriving the boolean from the timestamp would change how every event on the platform decides it is selling, which is a wider change than this module warrants.
+
+`settings.registrationClosesAt` is declared, defaulted to `null` and set on some events, but nothing in this module reads it. The resolver closes a sale through `isRegistrationOpen` and `status`, never through that date.
 
 ### An event's status closes its applications
 
 `getApplicationAvailability` is the one resolver a route reaches without going through `getEventRegistrationAvailability`: `/apply` renders `ApplicationForm`, which calls it directly. So it runs its own status table first, mapped onto its four states: `sold_out` becomes `full`, `draft` becomes `unavailable`, and the rest become `closed`. Without this, a cancelled programme said "Applications are open" and drew a working form while the event page correctly said otherwise.
+
+That table is status only. The end *date* is compared to `now` in the event-level resolver and nowhere in this one, so a date-ended event is caught on any path through `getEventRegistrationAvailability` (which `getRegistrationGate` asks) and not by `getApplicationAvailability` alone.
 
 ### The routes are gated, and the gate is presentational
 
@@ -730,14 +836,16 @@ The three availability flags (`soldOut`, `markSoldOut`, `remaining <= 0`) answer
 flowchart TD
   C(["getCategoryStatus"]) --> A{"Authored status is<br/>to_be_announced?"}
   A -- yes --> TBA["to_be_announced"]
-  A -- no --> I{"soldOut, markSoldOut,<br/>or remaining ≤ 0?"}
+  A -- no --> AS{"Authored status is<br/>sold_out?"}
+  AS -- yes --> SO0["sold_out"]
+  AS -- no --> I{"remaining ≤ 0, soldOut,<br/>or markSoldOut?"}
   I -- yes --> SO["sold_out"]
   I -- no --> OS["on_sale"]
 ```
 
-### Only one value is authored, and it can only close a line
+### An authored status can only close a line
 
-`sold_out` is derived: it is a fact about inventory, not something anyone types. `to_be_announced` is the only value data sets.
+`to_be_announced` is the value an organizer authors for a line they have not priced or dated. `getCategoryStatus` also honours an authored `sold_out`, which closes a line the same way `soldOut` does. (The comment on `TicketCategoryStatus` still says `sold_out` is a fact about inventory that nobody types; the function reads the authored value regardless.) An authored `on_sale` is ignored.
 
 **Order is the load-bearing part.** The authored status is read *before* the count, because an unannounced tier's `remaining` is a placeholder zero and reading it first would paint the tier red.
 
@@ -770,6 +878,10 @@ Neither closed state shows a price, because a placeholder zero renders as "Free"
 | `getEventRegistrationAvailability` | The status, to decide why its list is empty |
 
 The roll-ups use `some`, not `every`: a line-up half announced and half still to come is not sold out, and the tiers still to come are exactly what a reader would return for.
+
+### Other fields carried on a category
+
+Beyond the registration logic above, `TicketCategory` carries fields that this module only passes through, most of them API metadata: `allowedCouponCodes`, `platformFee`, `volumeDiscountTiers` (fixed or percentage, with quantity bounds), `apiId`, `clusterInfo`, `currencyCode`, `currencySymbol`, `isBundle`, `allowDirect`, `priority`, `quantity`, `soldCount`, `registrationType` and `tags`. `bundleSize` remains only as a legacy fallback for old data. Within this module only `markSoldOut` affects availability, through `getCategoryStatus`.
 
 ## Pre-registration and notify me
 
@@ -808,6 +920,8 @@ flowchart LR
 
 The two new availability states are `pre_registration` and `early_access`. `getPreRegistrationAvailability(event, viewer?, now?)` owns every string the module renders, including those the event-level branch shows, which copies `label` and `description` verbatim. One copy table, one viewer check.
 
+Its own states are `open`, `registered`, `full`, `closed` and `unavailable`. The event-level branch only draws `pre_registration` or `early_access` for `open`, `registered` and `full`; `closed` and `unavailable` fall through to the ordinary states, so a list that has not opened yet, or closed before the sale does, reads exactly as the event would with no key at all. The branch also requires `now` to be before `registrationOpensAt`, over the resolver's own closing rule. A `closesAt` past general sale is a misconfiguration the assertion reports only in development, and without this gate the same data would hold a live sale shut in production.
+
 Eligibility is `viewer?.status === "registered"`, plus `viewer.earlyAccessGranted` when `earlyAccess.eligibility` is `"selected"`. With no viewer the state is `pre_registration`, the safe direction: it offers the list, not a buy button nobody can use.
 
 ### Viewer state, and the prototype boundary
@@ -826,7 +940,7 @@ type PreRegistrationViewer = {
 
 `profile` lets the form avoid asking whether anyone is signed in: it draws an input for each of the three values it was not given, and a confirm step when it has all three. That is one flow instead of separate logged-in and logged-out branches. Nothing under `"use client"` reads the session: `lib/auth/session.ts` is `server-only`, and `SessionUser` has no phone number anyway.
 
-`listFull` is the only producer of the `full` state. `capacity` renders a number if the organizer wants one and is checked server-side at submit; a browser sees only its own registration, so any count it derives under-reports. Duplicates and notification delivery are also server-side.
+`listFull` is the only producer of the `full` state. `capacity` renders a number if the organizer wants one and is checked server-side at submit; a browser sees only its own registration, so any count it derives under-reports. Duplicates and notification delivery are also server-side. Somebody already registered is told they are on the list even when the list is full, because being told it is full when you are on it reads as being turned away.
 
 ### Where the clock lives
 
@@ -850,7 +964,15 @@ Known gap: a direct category URL is prerendered without a viewer, so it blocks e
 
 ### Assertions
 
-`assertPreRegistrationWindow` reports through `console.error` and dedupes per `slug:key`, because every case has a graceful fallback. `assertPreRegistrationFields` throws, because a field scoped to an attendee a pre-registration does not have, or one duplicating the name, email or phone every list already collects, has no sensible fallback.
+`assertPreRegistrationWindow` reports through `console.error` and dedupes per `slug:key`, because every case has a graceful fallback. It reports:
+
+- a `preRegistration` with no `registrationOpensAt`, so there is nothing for the window to close against and the module stays out of the way entirely
+- early access starting at or after general sale
+- the list opening at or after the effective close (an absent `closesAt` closes it at general sale)
+- the list closing after general sale
+- the two `isRegistrationOpen` disagreements described above
+
+`assertPreRegistrationFields` throws, because a field scoped to an attendee a pre-registration does not have, or one duplicating the name, email or phone every list already collects, has no sensible fallback. It also throws when a `preferred-category` field offers an option that is not the name of any current ticket category, the same parallel-array drift `nonPlayingRoles` has: a renamed category leaves an option pointing at nothing and the form goes on offering it.
 
 ## Registration location
 
@@ -895,6 +1017,8 @@ The setting is ignored in five modes:
 | `team`        | Always collects per-participant information.                      |
 | `donation`    | No attendees exist. Only donor details are collected.             |
 | `application` | No attendees exist until a place is granted. Only the applicant.  |
+
+`collectsPerAttendeeInfo(event)` encodes the first three: a bib, a roster place and a team place are all issued to a named person, so those modes answer yes whatever the event configured, and the setting decides it only for the rest.
 
 ## Registration fields
 
@@ -1022,7 +1146,7 @@ flowchart LR
     DONS["Donation placements"]
   end
   ACT["Actions<br/>stable object, intent-named"]
-  STORE[("Registration store<br/>one per event slug")]
+  STORE[("Registration store<br/>one per event slug<br/>and occurrence")]
   SEL["Selectors<br/>totals · admissions · lines · validity"]
   Surfaces -->|dispatch| ACT
   ACT --> STORE
@@ -1036,7 +1160,7 @@ Zustand, as a vanilla store read through `useStore`. The stores are small, mostl
 
 ### Scope
 
-One store per event registration session, keyed by event `slug`, so two events in two tabs never share a cart. It is created when a registration surface mounts and torn down on successful checkout or explicit reset.
+One store per event registration session, keyed by event `slug` and, where the event names one, its `occurrenceId` (see *Event identity, time zone and payment rails*). Two events in two tabs never share a cart, and neither do two dates of one event. It is created when a registration surface mounts and torn down on successful checkout or explicit reset.
 
 ### What belongs in the store
 
@@ -1060,7 +1184,7 @@ Compute these in selectors. Storing them creates two sources of truth that drift
 - Admission count: sums bundle contents, excludes lines with `admits: false`
 - Line count: the separate question of whether the order holds anything
 - The lowest price a visitor could actually pay, which no donation line sets
-- Age category, from date of birth against `raceRegistration.ageCalculatedOn`
+- Age category, from date of birth against `raceRegistration.ageCalculatedOn`, in the event's zone
 - Team, roster and substitute size validity against resolved minimums and maximums
 - Whether the current wizard step is complete and the next reachable
 - Effective donation configuration for a given placement
@@ -1162,6 +1286,8 @@ Every template supports every mode and layout; choose the template only for the 
 | `catalog-modal` | `single`, `multi`                           | The same mode-aware behaviour inside a modal.                                                         |
 | `wizard`        | `race`, `tournament`, `team`, `application` | Full-page steps. The only layout that fits a roster or a long application.                            |
 | `amount`        | `donation`                                  | Amount chips, custom input and optional campaign progress.                                            |
+
+`usesWizardRegistration(mode)` is the code's name for the wizard modes. `application` is in it because its questions and attachments do not fit a sidebar, not because it collects people the way the other three do.
 
 ### Booleans
 
@@ -1467,18 +1593,22 @@ settings: createEventSettings({
 - `application` with `onPageRegistration: true`: valid, but the status route makes a separate page the sensible default.
 - A category with `isDonation: true` that also has `bundleItems` or `separateRegistrationPage`: donation lines do not compose and have no dedicated page.
 - `admits: true` on a donation category: it would inflate the admission count and issue a QR ticket for a gift.
+- A `preRegistration` with no `registrationOpensAt`: there is nothing for the window to close against, so the module stays out of the way entirely.
+- A pre-registration `closesAt` after general sale: the event-level branch stops offering the list once the sale opens, whatever the date says, and the assertion reports it only in development.
 
 ## Current sample configuration
 
 Generated by reading `src/constants/event-details-data.ts`, not written from what events were meant to be. The hand-maintained table this replaced disagreed with the data three times: Art Walk's individual information, Food Carnival's cluster filter and mode, and Startup Demo Night's layout (listed as `modal`, shipped as `sidebar`).
 
-**Regenerate it; never edit a cell.** Read `EVENT_DETAIL_SLUGS` → `getEventDetail` → `settings`, and `getEventRegistrationAvailability(event)` for the State column, then diff against the rows here. Check the row count against the number of detailed events before pasting: a short table looks exactly like a correct one. This table once carried 14 rows against 17 events, missing the three that demonstrate `ended`, `paused` and `cancelled`, and nothing read wrong.
+**Regenerate it; never edit a cell.** Read `EVENT_DETAIL_SLUGS` → `getEventDetail` → `settings`, and `getEventRegistrationAvailability(event)` for the State column, then diff against the rows here. Check the row count against the number of detailed events before pasting: a short table looks exactly like a correct one. There are 14 detailed events as of this table. It once carried 14 rows against 17 events, missing three that demonstrated `ended`, `paused` and `cancelled`, and nothing read wrong. Those three (Product Summit Dhaka, Design Systems Lab and Riverfront Culture Fest) are no longer in `detailedEvents`, so no detailed sample event demonstrates those three states any more. A browse-only slug still resolves through `createFallbackDetail`, which copies the listing's status, so the states stay reachable that way.
+
+**The State column depends on the clock.** An event past its `ends` reads `ended` whatever its status says, so this column was evaluated on 5 October 2026 and will change as the 2027 dates pass. Regenerate it with the date in mind.
 
 `Required` in the cluster column means `clusterSelection: "required"`.
 
 | Event | Template | Layout | Mode | On-page | Individual info | Cluster filter | State | Also demonstrates |
 | ----- | -------- | ------ | ---- | ------- | --------------- | -------------- | ----- | ----------------- |
-| Aarong presents FIFA World Cup 2026 Watch Party | `hero` | `modal` | `multi` | Yes | No | On | `open` | the only `modal` layout, bundle, a spent notify-me window, `soldOutText`, a flag with stock |
+| Aarong presents FIFA World Cup 2026 Watch Party | `hero` | `modal` | `multi` | Yes | No | On | `open` | the only `modal` layout, bundle, a spent notify-me window, `soldOutText`, a flag with stock, the only video media |
 | Stage Laughs: Live Comedy | `hero` | `sidebar` | `single` | Yes | No | Off | `pre_registration` | notify me, minimal |
 | Creator Tech Expo | `agenda` | `sidebar` | `team` | Yes | No | Off | `open` | category pages, every category routes out |
 | Indie Friday Sessions | `poster` | `sidebar` | `multi` | Yes | No | On | `open` | bundle |
@@ -1492,19 +1622,18 @@ Generated by reading `src/constants/event-details-data.ts`, not written from wha
 | Flood Relief Fund | `campaign` | `amount` | `donation` | Yes | No | Off | `open` | donate action, no categories |
 | Dhaka Cycling Challenge | `race` | `catalog` | `race` | Yes | Yes | On | `coming_soon` | start waves, category pages, `comingSoonText` |
 | Winter Charity Gala | `hero` | `catalog` | `multi` | Yes | No | On | `pre_registration` | donation lines, bundle, pre-register with early access |
-| Product Summit Dhaka | `agenda` | `sidebar` | `single` | Yes | No | Off | `ended` | — |
-| Design Systems Lab | `hero` | `sidebar` | `single` | Yes | No | Off | `paused` | — |
-| Riverfront Culture Fest | `split` | `sidebar` | `single` | Yes | No | Off | `cancelled` | — |
 
 ### What the sample events cover
 
 Creator Tech Expo and Old Dhaka Art Walk show dedicated category pages on an inline flow; Dhaka Marathon and Dhaka Cycling Challenge do the same for a race, one staged behind distances and one from a catalog. They are also the two race shapes: the marathon assigns waves itself, the cycling challenge offers three. Startup Demo Night is the separate event-level page. Winter Charity Gala is the only event with donation lines beside real tickets, and Flood Relief Fund the only one with no categories.
 
-Three events carry `preRegistration`, spanning the module's range. Stage Laughs is the minimum: a `cta` and nothing else. Winter Charity Gala is the maximum: a capacity, a paid early-access window half an hour before general sale with `eligibility: "selected"`, two notification channels and three questions beside its existing event-level `registrationFields`, which proves the two do not collide. The Watch Party's window has closed and its sale has opened, so it reads `open` and the module has removed itself, the case the other two cannot show. It is also the only `modal` event; it sat `upcoming` with registration closed for a while, so the modal it exists to demonstrate could not be opened.
+Three events carry `preRegistration`, spanning the module's range. Stage Laughs is the minimum: a `cta` and nothing else. Winter Charity Gala is the maximum: a capacity, an early-access window half an hour before general sale with `eligibility: "selected"`, two notification channels and three questions beside its existing event-level `registrationFields`, which proves the two do not collide. The Watch Party's window has closed and its sale has opened, so it reads `open` and the module has removed itself, the case the other two cannot show. That is a fact about the clock: before its sale date of 11 September 2026 it read `pre_registration` too. It is also the only `modal` event; it sat `upcoming` with registration closed for a while, so the modal it exists to demonstrate could not be opened.
 
 Dhaka Cycling Challenge is announced *without* the key: `isRegistrationOpen: false` plus a `comingSoonText`, proving that an organizer who only wants to say "entries open later" needs a sentence, not a config object. The Watch Party's Skybox Table is the only category flagged sold out while stock remains, the shape `remaining` alone would call available and the reason the store checks all three flags.
 
-Here I Am carries the two newest features. Its `theme` is `#9a0000` on the `display` face: the only themed event, so the only one exercising the scoped palette, derived neutrals and drawn edge. That accent needs its hairline on dark, which `assertEventThemeContrast` reports at `warn`. Its General seat is `status: "to_be_announced"` with 34 seats left and `soldOut: false`, so nothing about it could be mistaken for sold out, and the event still reads `open` because Supporter seat is on sale beside it.
+Here I Am carries the theme and the only `to_be_announced` tier. Its `theme` is `#9a0000` on the `display` face: the only themed event, so the only one exercising the scoped palette, derived neutrals and drawn edge. That accent needs its hairline on dark, which `assertEventThemeContrast` reports at `warn`. Its General seat is `status: "to_be_announced"` with 34 seats left and `soldOut: false`, so nothing about it could be mistaken for sold out, and the event still reads `open` because Supporter seat is on sale beside it.
+
+**What nothing here exercises.** No sample event sets `additionalServices`, `platformFeeEnabled` or a category `platformFee`, an `occurrenceId`, or a non-empty `paymentRails`, and none sets an authored `status: "sold_out"` on a category. The coverage nets are bounded by what sample data declares, so none of these is seen by them.
 
 ### The drift these events used to show
 
@@ -1519,6 +1648,7 @@ flowchart TD
   DATA["event-details-data.ts<br/>config, resolvers, predicates"] --> PAGES["Routes under app/events/[slug]"]
   GATE["registration-gate.ts"] --> PAGES
   DATA --> GATE
+  TIME["event-time.ts<br/>zoned formatting and calendar parts"] --> DATA
   PAGES --> TPL["event-detail-templates.tsx<br/>templates, layout dispatch, theme css"]
   TPL --> REG["event-registration.tsx"]
   TPL --> CAT["event-ticket-catalog.tsx"]
@@ -1536,9 +1666,10 @@ flowchart TD
 
 | File | Responsibility |
 | ---- | -------------- |
-| `src/constants/event-details-data.ts` | Event, ticket, bundle, field, mode and template configuration, plus the resolvers and predicates that read it, including `getCategoryStatus`, `resolveEventTheme` and the theme assertions. |
+| `src/constants/event-details-data.ts` | Event, ticket, bundle, field, mode and template configuration, plus the resolvers and predicates that read it, including `getCategoryStatus`, `resolveEventPricing`, `getEventRegistrationAvailability`, `resolveEventTheme` and the theme assertions. Also the fixture events and the fallback detail. |
+| `src/lib/event-time.ts` | `zonedFormatter` (memoised) and `zonedCalendarParts`. Both take the zone as an argument and read no default. |
 | `src/constants/events-data.ts` | Browse listings, including standalone entries for events with no home-page slot. |
-| `src/lib/registration-store.ts` | The registration session: one store per slug, its actions and selectors. Also records the decision about a cart outliving its event's availability. |
+| `src/lib/registration-store.ts` | The registration session: one store per slug (and occurrence), its actions and selectors. Also records the decision about a cart outliving its event's availability. |
 | `src/lib/registration-gate.ts` | The presentational guard the four registration routes call; adds the category dimension. |
 | `src/lib/pre-registration-viewer.ts` | The one read of pre-registration viewer state, mocked. One file to point at the real endpoint. |
 | `src/components/events/detail/configurable-registration-fields.tsx` | **The shared field renderer.** `DynamicRegistrationFields` is the component; `RegistrationField` is the type. Every form uses it by name. |
@@ -1572,7 +1703,7 @@ Every one was added after something specific got through.
 | File | Catches |
 | ---- | ------- |
 | `src/test/harness.ts` | Renders components with a real DOM under `bun test`. Its limits are in the file: no CSS, so breakpoints are read from class lists; no Next runtime, so `next/image` throws and no test renders shipped event media. |
-| `src/test/fixtures.ts` | Builds events and categories for paths the shipped data leaves quiet, so nobody edits a shipped event to exercise a branch and forgets to revert it. `withSettings` makes the safe clone the short path, after hand-rolled spreads broke a check three times. |
+| `src/test/fixtures.ts` | Builds events and categories for paths the shipped data leaves quiet, so nobody edits a shipped event to exercise a branch and forgets to revert it. `withSettings` makes the safe clone the short path, after hand-rolled spreads broke a check three times. A non-Dhaka event is built here, never by editing a shipped one. |
 | `src/lib/registration-store.test.ts` | Two surfaces disagreeing about one order; a removal leaving attendee records or answers behind. |
 | `.../event-ticket-catalog.test.tsx` | Cart and drawer rendering different orders; placement 3 offering a quantity; a donation-only order unable to reach checkout. |
 | `.../team-registration-wizard.test.tsx` | A step losing what an earlier step collected. It caught `editTeam` defaulting size to one and collapsing the roster on the first keystroke. |
@@ -1658,9 +1789,13 @@ The spec is `AttachmentSpec`, not `ApplicationAttachment`, and is shared by appl
 
 The pricing rule existed only as prose first, which is a rule nothing can honour. `assertNonPlayingRolesExist` throws outside production when a name is missing from `roles`, because a subset array drifts, and the drift shows up as a coach being charged.
 
-#### Age is computed on the Dhaka calendar
+#### Age is computed on the event's calendar
 
-`getAgeOn` compares calendar dates rendered in `Asia/Dhaka`, not local `getMonth`/`getDate`. Local parts give a runner in another time zone a different age from the server's. Dividing elapsed milliseconds by a year is wrong by a day for about a quarter of entrants because of leap years, which hits exactly the people one day from a category boundary. Both were found by failing tests.
+`getAgeOn(dateOfBirth, on, timeZone)` compares calendar dates in the event's own zone, and `resolveAgeCategory` takes named arguments (`config`, `dateOfBirth`, `gender`, `timeZone`) because three bare strings transpose silently: a swapped pair typechecks and then quietly resolves an entrant into the wrong bracket.
+
+The zone used to be fixed to `Asia/Dhaka` and became a parameter when `timezone` became a required field. This is the zone-dependent site where a wrong answer matters most. `ageCalculatedOn` is a cutoff the organizer sets in local terms, and resolving it in the wrong zone can move it across midnight, which moves the computed age by a year for anyone whose birthday sits on the boundary and enters a real person in the wrong bracket. Every other zone-dependent formatter misstates a time a reader can check against what they know of the event; this one silently changes an outcome.
+
+Two older mistakes are why the comparison is calendar-wise. Local `getMonth`/`getDate` give a runner in another time zone a different age from the server's. Dividing elapsed milliseconds by a year is wrong by a day for about a quarter of entrants because of leap years, which hits exactly the people one day from a category boundary. Both were found by failing tests.
 
 #### Standard entrant fields live in the mode, not the data
 
@@ -1706,7 +1841,7 @@ Every other mode varies questions by category, and applications already carried 
 
 #### Programme capacity and track allocation are different numbers
 
-Programme `capacity` caps the whole; a track's `remaining` allocates within it, so Photography can close while Film stays open. Two numbers describing one pool drift silently (sixty places advertised, tracks adding to ninety), so `assertTrackCapacity` throws outside production. Both stay presentational; capacity is verified server-side.
+Programme `capacity` caps the whole; a track's `remaining` allocates within it, so Photography can close while Film stays open. Two numbers describing one pool drift silently (sixty places advertised, tracks adding to ninety), so `assertTrackCapacity` throws outside production. It is skipped for fewer than two tracks, where there is nothing to allocate between. Both numbers stay presentational; capacity is verified server-side.
 
 #### Application capacity is presentational
 
@@ -1848,9 +1983,13 @@ Some sample values exist because a question was answered: City Football Cup on-p
 
 #### Notify me on a sold-out event
 
-Production events carry a "Notify me" action for events not yet on sale or sold out. The not-yet-on-sale half shipped as `preRegistration` with `cta: "notify_me"`. The sold-out half is missing, and the precedence list shows why: an empty category list answers at step 4, before pre-registration at step 5, so a sold-out event never reaches the branch that would offer a list. That is correct as written, since a sold-out event does not reopen as a waiting list, and wrong for the feature, since a waiting list is exactly what a sold-out event wants. Closing it needs a state that is blocked *and* offers something, the shape `pre_registration` already has.
+Production events carry a "Notify me" action for events not yet on sale or sold out. The not-yet-on-sale half shipped as `preRegistration` with `cta: "notify_me"`. The sold-out half is missing, and the precedence list shows why: an empty category list answers at step 5, before pre-registration at step 6, so a sold-out event never reaches the branch that would offer a list. That is correct as written, since a sold-out event does not reopen as a waiting list, and wrong for the feature, since a waiting list is exactly what a sold-out event wants. Closing it needs a state that is blocked *and* offers something, the shape `pre_registration` already has.
 
 A `to_be_announced` tier does not close this gap. It gives a reader a reason to return, not a place to leave an address.
+
+#### Dates that nothing enforces
+
+`settings.registrationClosesAt` is declared and set on some events but read by no resolver, so a sale does not close when it passes. `getApplicationAvailability` does not compare `ends` to `now`, so the end date reaches `/apply` only through the event-level resolver. And a page prerendered before an event's end date keeps reading as selling until something with a real clock resolves it again. All three are the same shape as `isRegistrationOpen` against `registrationOpensAt`: a date and a flag describing one fact with nothing tying them together.
 
 ## Prototype boundary
 
@@ -1874,6 +2013,8 @@ flowchart LR
   end
   Built -->|"TODO(api)"| Needed
 ```
+
+The read side is no longer only fixtures. The data module carries fields that exist for API-backed events: `occurrenceId`, `paymentRails`, a `timezone` that `toEventDetail` reads from the catalogue response, and category metadata such as `apiId`, `markSoldOut` and `soldCount`. The shipped sample events are still fixtures, and every `TODO(api)` above is still a write or an enforcement this module does not perform.
 
 Three modes depend on backend work more heavily than the rest:
 
