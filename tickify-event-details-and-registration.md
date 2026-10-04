@@ -433,6 +433,7 @@ For marathons, cycling events, triathlons and any timed event where every entran
 - Age category is derived from date of birth, counted on the event's own calendar, and shown live as the entrant types
 - Waves are optional and have capacity independent of category availability
 - A versioned waiver must be accepted before checkout
+- Each entry type can issue race numbers from its own range (`bibSeries`)
 - An optional relay variant collects a roster instead of one participant
 
 ```mermaid
@@ -502,6 +503,29 @@ export type RaceRegistrationConfig = {
 Standard participant fields, all `scope: "attendee"`: date of birth, gender, nationality, bib name, T-shirt size, club affiliation, estimated finish time, emergency contact name and phone, relationship to entrant, medical conditions, blood group, and the waiver checkbox.
 
 Two behaviours need logic rather than plain fields. Age category is computed from date of birth against `ageCalculatedOn`, in the event's zone, and shown immediately so the entrant can confirm it. Wave capacity decrements separately from category `remaining`, so a preferred wave can be full while its distance is still open.
+
+#### Bib series
+
+```ts
+export type RaceBibSeries = {
+  /** Last number in the range, inclusive. Absent or `null` is unlimited. */
+  end?: number | null;
+  prefix?: string;
+  /** Zero-pad width. Absent or `0` means no padding. */
+  padding?: number;
+  start: number;
+};
+
+// TicketCategory
+/** Race events only. Absent means the category issues no race numbers. */
+bibSeries?: RaceBibSeries;
+```
+
+The range a category issues race numbers from lives on the **category**, not the event. "15KM – CA Member" and "15KM – Open" number from separate ranges, so a range shared across the event would hand the same number to two people. This is also why it is not part of `raceRegistration`: that config resolves per distance and merges field by field, and a series is one indivisible range that belongs to exactly one entry type.
+
+`start` is required and everything else is optional: `prefix` goes in front of the number, `padding` is the zero-pad width (absent or `0` means none), and an absent or `null` `end` means the range is unlimited. A category with no `bibSeries` issues no race numbers.
+
+The running counter is server state and is not modelled here. A browser only sees the numbers it issued itself, so any "next number" it derived would repeat one already given. The type describes the range and nothing about where the counter stands (see Prototype boundary).
 
 ### `tournament`
 
@@ -709,6 +733,7 @@ isDonation?: boolean;
 
 // Per-category overrides for the modes that have them
 raceRegistration?: RaceRegistrationOverride;       // Partial<RaceRegistrationConfig>
+bibSeries?: RaceBibSeries;                         // Race events only; see Bib series
 teamRegistration?: TeamRegistrationConfig;
 tournamentRegistration?: TournamentRegistrationOverride;
 ```
@@ -1592,6 +1617,7 @@ settings: createEventSettings({
 - `amount` with any mode other than `donation`: there is no amount to select.
 - `application` with `onPageRegistration: true`: valid, but the status route makes a separate page the sensible default.
 - A category with `isDonation: true` that also has `bundleItems` or `separateRegistrationPage`: donation lines do not compose and have no dedicated page.
+- `bibSeries` on a category of a non-race event: it is for race events only and means nothing elsewhere.
 - `admits: true` on a donation category: it would inflate the admission count and issue a QR ticket for a gift.
 - A `preRegistration` with no `registrationOpensAt`: there is nothing for the window to close against, so the module stays out of the way entirely.
 - A pre-registration `closesAt` after general sale: the event-level branch stops offering the list once the sale opens, whatever the date says, and the assertion reports it only in development.
@@ -1815,6 +1841,12 @@ Both scopes reach the wizard: attendee questions join the per-runner set; order 
 
 A race distance is a cluster, and its categories are who may enter and at what price: General, Student, Member, Member Elite, Foreigner, each with its own page and sold-out state. `TicketCluster` carries `startsAt` and `cutOff` because a distance starts and closes once regardless of who runs it; `resolveCluster` reads them. The relay is a fourth cluster with one category and carries the only category-level `raceRegistration` override; its `maxPerOrder` matches the roster size so the two limits cannot disagree.
 
+#### Bib ranges live on the category, and the counter is not modelled
+
+A `RaceBibSeries` sits on `TicketCategory` as `bibSeries`, beside `raceRegistration` but not inside it. Entry types number from separate ranges, so an event-level range would hand one number to two people, and `raceRegistration` is the wrong home because it merges per distance while a series is one range owned by one entry type. Absent means the category issues no numbers, so there is no flag beside it to disagree.
+
+The running counter is deliberately not in the type. A browser only sees the numbers it issued itself, so a "next number" derived on the client would repeat one already given. That is the same reason capacity and wave counts are presentational here.
+
 #### The race wizard's first step confirms rather than asks
 
 Most races set their own waves, so with wave selection off the first screen would be empty. It shows the distance, start time, cut-off, entry type and fee instead: real facts before anyone types entrant details. One wizard shape, four steps, with or without a wave choice.
@@ -2019,5 +2051,5 @@ The read side is no longer only fixtures. The data module carries fields that ex
 Three modes depend on backend work more heavily than the rest:
 
 - **`application`** with `paymentTiming: "on_approval"` needs an order that exists before payment, plus a durable reference the applicant can return to. The status page cannot be faked with local state.
-- **`race`** needs wave capacity that decrements independently of category availability, and bib allocation at issuance.
+- **`race`** needs wave capacity that decrements independently of category availability, and bib allocation at issuance: the server owns the running counter for each category's `bibSeries` and issues the next number from it.
 - **`donation`** needs an order line carrying an amount instead of a quantity, and a campaign total read from and written to the server.
