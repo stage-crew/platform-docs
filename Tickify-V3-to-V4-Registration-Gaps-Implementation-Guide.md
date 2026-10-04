@@ -1,12 +1,14 @@
-# Tickify V3 → V4 Registration and Checkout Gaps: Implementation Guide
+# Tickify V3 → V4 Registration, Checkout and Data Model Gaps: Implementation Guide
 
 ## Purpose
 
-V4 must support sixteen features covering registration, checkout and event categorization; this guide specifies each one as config plus the expected behaviour.
+V4 must support sixteen features covering registration, checkout and event categorization, and must move its ticket tier and event data onto the target V4 types. This guide covers eighteen gaps: Gaps 1–16 specify each feature as config plus the expected behaviour; Gaps 17–18 map the current V4 data model to the target types.
 
-For each gap you get: what it does, which live events need it, the config to set (where there is any), the expected V4 behaviour, and a working reference where one exists.
+For each feature gap you get: what it does, which live events need it, the config to set (where there is any), the expected V4 behaviour, and a working reference where one exists. For Gaps 17 and 18 you get the current shape, the target shape, a field-by-field mapping and migration notes.
 
-**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end. Gap 15 requires importing V3 event categories and event-category assignments, exposing them through the events API, and connecting the homepage category slider and events-page filters to that data. Gap 16 requires event-level photo settings, tier-level overrides, conditional upload fields for individual registration, and server-side upload validation and storage.
+**Scope.** Gaps 1–7 are config in sample/mock data on the frontend (tickify-web); no backend work. Gap 12 is a frontend layout change. Gaps 17 and 18 are type and mapper changes on the frontend. Gaps 8–11, 13 and 14 (cart and order hold timeout, abandoned-cart reminders, checkout, confirmation, payment return, account orders) cannot be done frontend-only: order creation, holds, expiry, seat release, coupon validation, payment status, order filtering and scheduled emails must run on the server. Their behaviour is specified here the same way, but each needs backend work before it can be QA'd end to end. Gap 15 requires importing V3 event categories and event-category assignments, exposing them through the events API, and connecting the homepage category slider and events-page filters to that data. Gap 16 requires event-level photo settings, tier-level overrides, conditional upload fields for individual registration, and server-side upload validation and storage.
+
+**Migration rule (applies to every gap).** V3 does not carry the full config. When migrating V3 → V4, the V3 data fills only the fields it actually has. Every V4-only option must still exist in the output: keep its current V4 value, or give it its documented default. Never drop a V4 field because V3 has no source for it.
 
 How to use it: pick a gap, apply the config to the listed event in V4, then compare against the V3 page and the V4 reference. Tick it off in the QA checklist at the end.
 
@@ -23,29 +25,34 @@ How to use it: pick a gap, apply the config to the listed event in V4, then comp
 | 7 | Tier-level coupon assignment | Tier | Any event with coupons | — |
 | 8 | Cart and order hold timeout | Event | All event types | [V4 cart](https://abir-web-development.up.railway.app/cart) |
 | 9 | Abandoned-cart reminder email | Event | Events with order hold timeout disabled | — |
-| 10 | Checkout page (review, coupons, add-on services) | Platform (add-ons TBD) | All event types | [V4 checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001) |
+| 10 | Checkout page (review, coupons, platform fee, additional services) | Platform + event (`platformFeeEnabled`, `additionalServices`) + tier (`platformFee`) | All event types | [V4 checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001) |
 | 11 | Order confirmation page | Platform | All event types | [V4 confirmation](https://abir-web-development.up.railway.app/checkout/art-walk-order-2027-002/success) |
 | 12 | Event card: price and Book now | Platform | All event types | — |
 | 13 | Payment return page (cancelled, failed, pending, other issues) | Platform | All event types | — |
 | 14 | Account orders page: paid orders only | Platform | All event types | — |
 | 15 | Homepage category slider and event categorization | Platform categories + event assignments | All event types | [V4 events](https://abir-web-development.up.railway.app/events) · [Music](https://abir-web-development.up.railway.app/events?category=Music) · [Sports](https://abir-web-development.up.railway.app/events?category=Sports) |
 | 16 | Photo required for individual registration | Event default + tier override | Ticket categories with `registrationType: "individual"` | — |
+| 17 | Ticket tier data model (`TicketCategory`) | Tier | All event types | — |
+| 18 | Event detail, settings and media data model | Event | All event types | — |
 
 ## Core concepts
 
-Every setting lives either on the event (applies to all tiers) or on a ticket tier (applies to that tier only). Tier-level config adds to or overrides event-level config. Gaps 10–14 are platform behaviour with no per-event setting (except the open question on add-on services in Gap 10).
+Every setting lives either on the event (applies to all tiers) or on a ticket tier (applies to that tier only). Event config is split between the top level of the event record and its `settings` object. Tier-level config adds to or overrides event-level config. Gaps 11–14 are platform behaviour with no per-event setting; Gap 10 reads the platform fee and additional-services config listed below.
 
 | Level | Where it lives | Examples |
 | --- | --- | --- |
-| Event | Event settings object | `registrationMode`, `registrationLayout`, `showClusterFilter`, `onPageRegistration`, `collectIndividualInformation`, `teamRegistration`, `registrationFields`, `orderHold`, `abandonedCartReminder` |
-| Ticket tier | Each item in the event's tiers list | `cluster`, `separateRegistrationPage`, `teamRegistration`, `registrationFields`, `allowedCouponCodes`, `cardImageUrl` |
+| Event detail | Top level of the event record (`EventDetail`, Gap 18) | `registrationFields`, `registrationNote`, `clusters`, `addons`, `content.bannerMedia`, `content.thumbnailMedia` |
+| Event settings | The event's `settings` object (`EventSettings`, Gap 18) | `registrationMode`, `registrationLayout`, `showClusterFilter`, `clusterSelection`, `onPageRegistration`, `collectIndividualInformation`, `teamRegistration`, `orderHold`, `abandonedCartReminder`, `platformFeeEnabled`, `additionalServices`, `photoRequired`, `photoFieldLabel`, `visibility` |
+| Ticket tier | Each item in the event's tiers list (`TicketCategory`, Gap 17) | `cluster`, `separateRegistrationPage`, `teamRegistration`, `registrationFields`, `allowedCouponCodes`, `cardImageUrl`, `registrationType`, `platformFee`, `photoRequired` |
 
-**Field scope.** Every registration field has a `scope`:
+**Config snippets.** Each snippet shows only the fields relevant to its gap. A complete tier must still satisfy the `TicketCategory` type in Gap 17 (for example `slug`, `remaining` and the required `platformFee`). Prices are in major units (`price: 1600`, not minor units).
+
+**Field scope.** Every registration field has a required `scope`:
 
 - `"order"` — asked once per order (for example organisation name, dietary notes).
 - `"attendee"` — asked once for each ticket or person (for example student ID, membership number).
 
-**Field shape.** A registration field takes `id`, `label`, optional `placeholder`, optional `helpText`, `required` (default false), `scope`, optional `type` (text by default; also `textarea`, `select`) and `options` when `type` is `select`.
+**Field shape.** A registration field (`RegistrationField`, Gap 18) takes `id`, `label`, optional `placeholder`, optional `helpText`, `required` (default false), `scope`, optional `type` (text by default; also `textarea`, `select`) and `options` when `type` is `select`.
 
 **Purchase flow.** Every event, of every type, follows the same path:
 
@@ -112,6 +119,8 @@ teamRegistration: {
 }
 ```
 
+The current V4 tier fields `teamMinSize` and `teamMaxSize` move into this `teamRegistration` override (Gap 17).
+
 **Expected behaviour**
 
 - The buyer cannot submit a team smaller than `minSize` or larger than `maxSize`.
@@ -152,11 +161,15 @@ showClusterFilter: true,
 - A filter shows one option per distinct `cluster` value; choosing one hides tiers from other clusters.
 - Cluster names must match exactly (case and spacing) to group together.
 
+**Related config.** The target settings add `clusterSelection` (`"filter" | "required"`) next to `showClusterFilter`; the behaviour of `"required"` is not specified in this guide, so confirm it against the event details doc. The event-level `clusters` list (`EventCluster`: id, name, colour, icon and `ticketTierIds`) stays as in current V4 (Gap 18).
+
+**Open question:** tiers can be grouped both by the tier's `cluster` name and by `EventCluster.ticketTierIds`. Confirm which one drives the filter, and what happens when they disagree.
+
 ## Gap 3 — Event-level additional fields
 
 Add extra questions that every buyer answers, whichever tier they pick.
 
-**Config — event details.**
+**Config — event detail (top level).**
 
 ```ts
 registrationFields: [
@@ -244,7 +257,7 @@ Give each tier its own registration page, reached from a category-select page, i
 
 **Expected behaviour**
 
-- `/events/<event>/register` lists the tiers; each links to `/events/<event>/register/<tier-id>`.
+- `/events/<event>/register` lists the tiers; each links to `/events/<event>/register/<tier>` (whether `<tier>` is the tier `id` or `slug` is open; see the check in Gap 6).
 - Each tier page shows only that tier's fields plus event-level fields.
 - With `scope: "attendee"`, Student ID is asked once per ticket (up to 3 here).
 - Submitting a tier page takes the buyer to checkout (Gap 10).
@@ -298,6 +311,8 @@ showClusterFilter: true,
 }
 ```
 
+Race categories can also carry a `raceRegistration` override and a `bibSeries` for bib numbering (both in Gap 17), and the event can set `settings.raceRegistration` (Gap 18). Bib assignment behaviour is not covered by this guide.
+
 **Expected behaviour — the buyer's path**
 
 1. The event page shows the categories but no inline registration form.
@@ -305,7 +320,7 @@ showClusterFilter: true,
 3. The tier page opens the wizard, which collects each runner's details and the tier's fields.
 4. The registration form is submitted at the end of the wizard, and the buyer goes straight to checkout (Gap 10).
 
-**Check:** the reference tier URL ends in `half-marathon-memberelite` while the tier `id` is `half-marathon-member-elite`. Confirm whether the route slug is derived from `id` or set separately.
+**Check:** the reference tier URL ends in `half-marathon-memberelite` while the tier `id` is `half-marathon-member-elite`. Tiers keep a `slug` field in the target type (Gap 17); confirm whether the route uses `slug` or `id`.
 
 ## Gap 7 — Tier-level coupon assignment
 
@@ -355,10 +370,9 @@ orderHold: {
 **Expected behaviour — cart (always on)**
 
 - A **Cart** button sits in the site navbar on every page, for signed-in and guest buyers, and opens the cart page.
-- Submitting the registration form creates an unpaid order. The order appears in the cart immediately, and the buyer is taken straight to its checkout page (see Purchase flow). There is no "add to cart" step.
+- The unpaid order created when the registration form is submitted (see Purchase flow) appears in the cart immediately.
 - The cart shows one order card per event. Each card opens that order's checkout page (`/checkout/<order-id>`) so the buyer can resume.
 - Because registration comes first, every order has the buyer's email, signed in or not.
-- Paid orders leave the cart and appear on the buyer's account orders page (Gap 14).
 - The cart page is always reachable, including when it is empty; an empty cart shows an empty state rather than an error or redirect.
 - **Regular tickets are not reserved by an unpaid order.** Availability is only taken at payment. If a regular tier sells out while an order for it is unpaid, checkout must re-check availability and tell the buyer before payment is attempted, not after.
 - **Seated tickets are reserved** when the order is created, for as long as the hold setting below allows.
@@ -422,28 +436,50 @@ abandonedCartReminder: {
 
 ## Gap 10 — Checkout page
 
-After submitting the registration form, the buyer goes straight to the checkout page for that order. Checkout is where the buyer reviews the order, redeems coupons, chooses additional services and pays. It is not only a payment step.
+Checkout is where the buyer reviews the order, redeems coupons, chooses additional services, sees the platform fee and pays. It is not only a payment step.
 
 - **Reference:** [V4 checkout](https://abir-web-development.up.railway.app/checkout/watch-party-order-2027-001)
+- **Platform fee and additional services spec:** [event details doc](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#additional-services-and-the-platform-fee)
 
-**Config.** None for the page itself. Coupon rules come from each tier's `allowedCouponCodes` (Gap 7), and the countdown comes from the event's `orderHold` (Gap 8). Add-on service config is an open question below.
+**Config.** The page itself has none. It reads:
+
+| Input | Where | Used for |
+| --- | --- | --- |
+| `allowedCouponCodes` | Each tier (Gap 7) | Coupon validation |
+| `orderHold` | Event settings (Gap 8) | Countdown |
+| `platformFee` | Each tier (required, Gap 17) | Platform fee line |
+| `platformFeeEnabled` | Event settings (required) | Turns the platform fee line on |
+| `additionalServices.refundGuarantee.charge` | Event settings | Refund guarantee price |
+| `additionalServices.whatsappTickets.charge` | Event settings | WhatsApp ticket delivery price |
 
 **Expected behaviour**
 
 - The page lives at `/checkout/<order-id>` and is reached from the registration form, from an order card in the cart, from the reminder link (Gap 9), or from "Try again" on the payment return page (Gap 13).
 - **Order review:** shows the event, tiers, quantities (and seats, for seated events) and the details entered on the registration form.
 - **Coupons:** a coupon field validated on the server against each tier's `allowedCouponCodes` (Gap 7). The price summary updates when a code is applied or removed.
-- **Additional services:** the buyer can choose optional services, such as ticket delivery via WhatsApp and a refund guarantee. Selected services appear in the price summary. If WhatsApp delivery is selected, a WhatsApp number is required (prefilled if the registration form collected a phone number).
+- **Platform fee:** when `settings.platformFeeEnabled` is on, the price summary shows a platform fee line calculated from the `platformFee` of each tier in the order.
+- **Additional services:** the refund guarantee and WhatsApp ticket delivery are offered only when configured in `settings.additionalServices`, each with its own `charge`. Selected services appear in the price summary. If WhatsApp delivery is selected, a WhatsApp number is required (prefilled if the registration form collected a phone number).
+- **Price summary:** the order total includes tickets, coupon discounts, the platform fee and selected services, with each line shown separately.
+- **State:** totals, the platform fee and the services total are derived in selectors and never stored. Only the buyer's choices (which services are selected) live in the registration store.
 - **Hold timer:** when the order hold is enabled, the countdown is shown here. Nothing on this page resets it.
 - **Before payment:** availability of regular tiers is re-checked. If any tier in the order has sold out, the buyer is told and payment is not started.
 - **Payment succeeds:** the buyer goes to the confirmation page (Gap 11) and the order leaves the cart.
 - **Payment cancelled, failed, pending or any other issue:** the buyer goes to the payment return page (Gap 13), which shows what happened and what to do next. The order stays in the cart, subject to the hold timer.
 - **Free orders** (total of 0, including after a 100% coupon): no payment step. Confirming the order goes straight to the confirmation page.
 
-**Open questions**
+**Open questions — to confirm from the platform fee spec before implementing**
 
-- Are additional services offered on every event, or does the organizer choose per event? Who sets their price (Tickify or the organizer)?
-- Refund guarantee: is it priced per order or per ticket, as a fixed fee or a percentage, and what are its terms?
+- The platform fee formula: per ticket, per order or a percentage, and how it is rounded.
+- Whether lines with `admits: false` (donations) attract a platform fee.
+- How bundles are charged: once per bundle or per included ticket.
+- Whether a platform fee applies to free tiers, or to orders brought to 0 by a coupon. This decides whether such an order is still free and skips payment.
+- Whether each service's `charge` is per ticket or per order, and a fixed fee or a percentage; whether services are opt-in or pre-selected; and the refund guarantee's terms.
+- VAT: `vatBps` is dropped from the tier (Gap 17), so confirm that no VAT is expected on the platform fee or the services.
+
+**Open questions — product**
+
+- Who sets each service's `charge`: Tickify or the organizer?
+- How do the event-level `addons` (`EventAddon[]`, Gap 18) relate to `settings.additionalServices`? Confirm whether add-ons also appear on checkout.
 - Do free orders still show the checkout page (for example to offer WhatsApp delivery), or go straight from registration to confirmation?
 - Can the buyer edit registration details from checkout, or must they go back to the registration form?
 
@@ -460,8 +496,7 @@ V4 currently has no order confirmation page. Add one, shown after a successful p
 - The page lives at `/checkout/<order-id>/success`. Layout and content follow the V4 template.
 - It confirms the order ID, event and tickets, and how the tickets will be delivered (including WhatsApp, if chosen at checkout).
 - It is shown only when the server has confirmed the order as paid (or as a completed free registration). The payment gateway's redirect alone is not enough; the page reads the order status from the server.
-- It is used for successful payments only. Cancelled, failed and pending payments, and any other issue, go to the payment return page (Gap 13).
-- Opening the URL for an unpaid order sends the buyer to that order's checkout page instead, or to the payment return page if a payment is still pending.
+- Opening the URL for an unpaid order sends the buyer to that order's checkout page instead, or to the payment return page (Gap 13) if a payment is still pending.
 - Reloading or reopening the page shows the same confirmation. It never creates a second order or a second charge.
 - From this point the order appears on the buyer's account orders page (Gap 14).
 
@@ -474,12 +509,16 @@ On event cards (wherever events are listed), show **"Starts from <price>"** on t
 **Expected behaviour**
 
 - Left side: "Starts from" followed by the lowest tier price. Every tier counts, including tiers that are sold out or not yet on sale.
+- If the API supplies `minPrice` on the event (Gap 18), it must follow the same rule.
 - Free events (every tier priced at 0) show "Free" instead of "Starts from <price>".
 - Right side: the "Book now" button.
 - Sold-out events (every tier at `remaining: 0`): the button label changes to "Sold out" and the button is disabled.
 - The same layout applies on every event card, wherever event cards appear.
 
-**Open question:** an event with both free and paid tiers has a lowest price of 0. Should its card show "Free" (which may read as the whole event being free) or "Starts from Free"?
+**Open questions**
+
+- An event with both free and paid tiers has a lowest price of 0. Should its card show "Free" (which may read as the whole event being free) or "Starts from Free"?
+- The target tier also has `soldOut`, `markSoldOut` and `status` (Gap 17). Confirm whether a tier marked sold out while stock remains counts as sold out for the card.
 
 ## Gap 13 — Payment return page
 
@@ -567,13 +606,15 @@ V3 already supports event categories, and one event can belong to multiple categ
 - Clearing the category filter returns to the unfiltered events listing.
 - If the selected category has no matching events, show a clear empty state.
 
+**Open question:** the target `EventDetail` (Gap 18) has no categories field. Confirm where the imported assignments live: a new field, or an existing one such as `discoveryTags`.
+
 ## Gap 16 — Photo required for individual registration
 
 V3 includes a **Photo Required** toggle in Event Settings, with a customizable field label such as **Upload your NID** or **Upload your Photo/Selfie**. In V3, this feature applies only when Individual Registration Mode is enabled.
 
-Add this feature to V4, applicable only when the ticket category's `registrationType` is `"individual"`. The event-level setting provides the default, and each ticket tier can override that default to enable or disable photo collection.
+Add this feature to V4, applicable only when the ticket category's `registrationType` is `"individual"` (`registrationType` replaces the current V4 tier field `kind`; see Gap 17). The event-level setting provides the default, and each ticket tier can override that default to enable or disable photo collection.
 
-**Config — event default and tier override.** The following field names are proposed for V4; map them to the existing V3 settings during migration.
+**Config — event default and tier override.** The following field names are proposed for V4 and are added to the types in Gaps 17 and 18; map them to the existing V3 settings during migration.
 
 ```ts
 // Event Settings
@@ -609,6 +650,248 @@ On the ticket category, `photoRequired` is an optional boolean: omit it to inher
 - Apply the rule independently for each tier in an order. A photo requirement on one tier must not apply to attendees from another tier where photo collection is disabled.
 - Validate the effective requirement on the server and associate each uploaded file with the correct attendee before proceeding to checkout.
 
+## Gap 17 — Ticket tier data model (`TicketCategory`)
+
+Bring the current V4 tier shape in line with the target `TicketCategory` type, and add the mapper from one to the other. The tier snippets in Gaps 1–16 already use the target names.
+
+- **Type reference:** [Ticket category config — types](https://github.com/stage-crew/platform-docs/blob/main/ticket-category-config.md#types)
+
+### 17.1 Current V4 tier shape
+
+```json
+{
+  "id": "abaf9809-4464-59e4-8c17-85dd0dddfd4d",
+  "slug": "general-15km-1481",
+  "name": "General - 15KM",
+  "description": "",
+  "badge": null,
+  "altPriceText": null,
+  "kind": "GENERAL",
+  "currency": "BDT",
+  "faceMinor": 120000,
+  "vatBps": 0,
+  "minPerOrder": 1,
+  "maxPerOrder": 300,
+  "teamMinSize": null,
+  "teamMaxSize": null,
+  "isHighlighted": false,
+  "registrationFields": []
+}
+```
+
+### 17.2 Target shape
+
+```ts
+type TicketCategory = {
+  id: string;
+  slug: string;                 // kept from current V4 (not in the reference type)
+  name: string;
+  description: string;
+  altPriceText?: string;        // kept from current V4 (not in the reference type)
+  minPerOrder?: number;         // kept from current V4 (not in the reference type)
+  isHighlighted?: boolean;      // kept from current V4 (not in the reference type)
+  photoRequired?: boolean;      // proposed in Gap 16 (not in the reference type)
+  price: number;
+  originalPrice?: number;
+  remaining: number;
+  maxPerOrder: number;
+  badge?: string;
+  soldOut?: boolean;
+  platformFee: number;
+  status?: TicketCategoryStatus;
+  allowedCouponCodes?: string[];
+  bundleItems?: Array<{ categoryId: string; quantity: number }>;
+  bundleSize?: number;
+  cluster?: string;
+  separateRegistrationPage?: boolean;
+  registrationFields?: RegistrationField[];
+  admits?: boolean;
+  cardImageUrl?: string;
+  donation?: DonationConfig;
+  isDonation?: boolean;
+  raceRegistration?: RaceRegistrationOverride;
+  teamRegistration?: TeamRegistrationConfig;
+  tournamentRegistration?: TournamentRegistrationOverride;
+  bibSeries?: RaceBibSeries;    // added to TicketCategory
+  allowDirect?: boolean;
+  apiId?: number;
+  clusterInfo?: TicketCluster | null;
+  currencyCode?: string;
+  currencySymbol?: string;
+  isBundle?: boolean;
+  markSoldOut?: boolean;
+  priority?: number;
+  quantity?: number;
+  registrationType?: RegistrationType;
+  soldCount?: number;
+  tags?: string[];
+  volumeDiscountTiers?: VolumeDiscountTier[];
+};
+
+type RegistrationType = "general" | "team" | "group" | "individual" | string;
+
+export type RaceBibSeries = {
+  /** Last number in the range, inclusive. Absent or `null` is unlimited. */
+  end?: number | null;
+  prefix?: string;
+  /** Zero-pad width. Absent or `0` means no padding. */
+  padding?: number;
+  start: number;
+};
+```
+
+`slug`, `altPriceText`, `minPerOrder` and `isHighlighted` are kept from the current V4 tier as extensions of the reference type, and `photoRequired` is added for Gap 16. `vatBps` is dropped. `cluster` and `clusterInfo` stay as in the reference type (event-level clusters are covered in Gap 18).
+
+### 17.3 Field-by-field mapping
+
+| Current V4 tier field | Target `TicketCategory` field | Action |
+| --- | --- | --- |
+| `id` | `id` | Same. |
+| `slug` | `slug` | Keep; carried over unchanged. |
+| `name` | `name` | Same. |
+| `description` | `description` | Same (`""` stays valid). |
+| `badge` (`null`) | `badge?: string` | `null` → omit the key. |
+| `altPriceText` (`null`) | `altPriceText?: string` | Keep. `null` → omit the key. |
+| `kind` (`"GENERAL"`) | `registrationType?: RegistrationType` | Values are lowercase, so `"GENERAL"` → `"general"`. |
+| `currency` | `currencyCode` | Rename. `currencySymbol` is also needed and the tier does not carry it. |
+| `faceMinor` (`120000`) | `price` | Minor units → major units (`120000` → `1200`). |
+| `vatBps` | none | Drop. |
+| `minPerOrder` | `minPerOrder?: number` | Keep, next to `maxPerOrder`. |
+| `maxPerOrder` | `maxPerOrder` | Same. |
+| `teamMinSize` / `teamMaxSize` | `teamRegistration.minSize` / `.maxSize` | Move into the `teamRegistration` override. Create the object only when at least one is non-null. |
+| `isHighlighted` | `isHighlighted?: boolean` | Keep. |
+| `registrationFields` | `registrationFields?` | Same name. Each field must match `RegistrationField`, with a `scope`. |
+
+### 17.4 Target fields with no current V4 source
+
+These do not exist on the current tier. Add them from the API or with their documented defaults:
+
+- **Inventory and status:** `remaining`, `soldOut`, `markSoldOut`, `soldCount`, `quantity`, `status` (`TicketCategoryStatus`).
+- **Fees and pricing:** `platformFee` (required), `originalPrice`, `allowedCouponCodes`, `volumeDiscountTiers`.
+- **Bundles and clusters:** `bundleItems`, `bundleSize`, `isBundle`, `cluster`, `clusterInfo`.
+- **Routing and display:** `separateRegistrationPage`, `allowDirect`, `cardImageUrl`, `priority`, `tags`.
+- **Donation and admission:** `admits`, `isDonation`, `donation`.
+- **Mode overrides:** `raceRegistration`, `teamRegistration`, `tournamentRegistration`.
+- **Race bibs:** `bibSeries` (`start`, optional `end`, `prefix`, `padding`). It is optional and V3 has no source, so omit it when there is no V4 value.
+- **Photo upload:** `photoRequired` (Gap 16). Omit it to inherit the event default.
+- **API linkage:** `apiId`.
+
+### 17.5 Migration notes
+
+- V3 fills `id`, `name`, `description`, `price`, `maxPerOrder` and any other field it has. `slug`, `altPriceText`, `minPerOrder` and `isHighlighted` keep their V4 values when V3 has no source. Every other field follows the migration rule.
+- `platformFee` is required and has no V3 or current tier source, so it needs an explicit default. It feeds the platform fee line on checkout (Gap 10).
+- Status precedence: an authored `to_be_announced` is read before the stock count, and `on_sale` can never override zero stock.
+
+**Open question:** confirm the minor → major divisor for BDT. It applies to `faceMinor` here and to the donation `*Minor` settings in Gap 18.
+
+## Gap 18 — Event detail, settings and media data model
+
+Bring the current V4 `EventDetail`, `EventSettings` and `EventContent` in line with the target types, migrate V3 media into the new media shape, and carry each event's V3 visibility into V4.
+
+- **Reference:** [Tickify event details and registration](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md) · [Visibility](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#visibility)
+
+### 18.1 Structural gaps
+
+| Area | Current V4 | Target | Gap |
+| --- | --- | --- | --- |
+| Identity | `id: string`, `slug`, `title`, `subtitle` | `slug`, `id?: number`, `title`, `eyebrow`, `summary`, optional `occurrenceId` | `id` becomes optional and numeric. `subtitle` has no direct target. `eyebrow` and `summary` are new (nullable, see 18.2). |
+| Dates | `startsAt`, `endsAt`, `doorsOpenAt`, `timezone` | `starts`, `ends`, `doorsOpen` (`ISODateTime \| string`), `timezone` | Renames. |
+| Status and flags | `status`, `isFeatured`, `sellable` at event level | `settings.status`, `settings.isFeatured`; no `sellable` | Move into `settings`. `EventStatus` widens to the browse statuses plus `draft`, `ongoing`, `completed`, `sold_out`. |
+| Images | `imageCardUrl`, `imageBannerUrl` | `content.thumbnailMedia`, `content.bannerMedia` (`EventMedia`) | Replace single URLs with `{ type: "image" \| "video"; src }[]` (see 18.5). |
+| Organisation | `organization { id, slug, name }` | `organizer` (description, email, socials, `logo_url`, `slug`, numeric `id`) | Rename and widen. |
+| Venue | `venue { id, name, city, timezone }` | `venue { address, googleMapEmbedding, id: number, latitude, longitude, name } \| null`, plus event-level `location` and `address` strings | No `city` or `timezone` on the target venue. Needs address, map embed and coordinates. |
+| Price | none | `priceRange?`, `minPrice?` | New. `minPrice` must follow the Gap 12 rule. |
+| SEO | `seoTitle`, `seoDescription` | `content.metaDescription` | `seoDescription` → `metaDescription`. `seoTitle` has no target. |
+| Content body | `content.description`, `acknowledgements`, `ticketPolicy` | `content.descriptionHtml`, `content.policyHtml` | Rename. `acknowledgements` has no target. |
+| Content extras | `rulebookUrl`, `promoVideoDesktopUrl`, `promoVideoMobileUrl`, `promoBannerUrl` | Video items inside `bannerMedia` / `thumbnailMedia` | Promo media are kept (see 18.5). `rulebookUrl` has no target. |
+| Content labels | none | `buttonLabel`, `creativesLabel`, `comingSoonText`, `soldOutText`, `modified` | New, optional. |
+| FAQ | `content.faq: unknown \| null` | `faqs: { question; answer }[]` (top level, required) | Typed and moved. |
+| Gallery, sponsors, performers | `content.gallery`, `.sponsors`, `.performers` (`unknown`) | Top-level `gallery`, `sponsors`, `creatives`, plus new `partners` | Typed and moved. `performers` → `creatives`. |
+| Occurrences | `occurrences[]` | `occurrenceId?` only | Occurrence detail leaves `EventDetail`. |
+| Clusters | `clusters: EventCluster[]` (id, name, colorHex, iconName, `ticketTierIds`) | Unchanged | No change. `showClusterFilter` and `clusterSelection` are still added to settings (Gap 2). |
+| Registration fields | `registrationFields: unknown[]` | `registrationFields?: RegistrationField[]`, plus required `registrationNote` | Typed. |
+| Payment | `paymentRails` | `paymentRails` | Same. |
+
+### 18.2 New top-level `EventDetail` fields
+
+- **Required:** `eyebrow`, `summary`, `location`, `address`, `highlights: string[]`, `schedule: EventScheduleItem[]`, `registrationNote`, `faqs`.
+- **Optional:** `addons` (`EventAddon[]`), `imageMapData`, `discoveryTags`, `creatives`, `partners`, `sponsors`, `gallery`, `reviewSummary`, `marketingTrackers`, `created`, `modified`.
+
+**Fields V3 cannot fill.** `eyebrow`, `summary`, `registrationNote`, `highlights` and `schedule` stay `null` when V3 has no source. The target types declare them as non-nullable (`string`, `string[]`, `EventScheduleItem[]`), so widen them to `T | null`, and make the templates handle `null` (no eyebrow, no highlights block, no schedule section).
+
+### 18.3 `EventSettings` mapping
+
+**Renames and retypes**
+
+| Current | Target |
+| --- | --- |
+| `pageTemplate` | `eventPageTemplate` (narrowed to `EventDetailTemplate`) |
+| `registrationLayout`, `registrationMode` | Same names; drop the `string` fallback so they match the `RegistrationLayout` / `RegistrationMode` unions |
+| `collectIndividualInfo` | `collectIndividualInformation` |
+| `showRemainingPasses` | `showRemainingTickets` |
+| `showRemainingPercent` | `showAvailabilityAsPercentage` |
+| `showPhaseTimer` / `showSaleCountdown` | `showSalesTimer`, with `salesPhaseEndsAt` and `salesTimerLabel` |
+| `eligibility`, `eligibilityMessage` | `restrictedToAccessList`, `accessRestrictionMessage` (semantics to confirm) |
+| `currency: string` | `currency: { code, symbol }` |
+| `donationsEnabled`, `donationPresetsMinor`, `donationAllowAnyAmount`, `donationMinAmountMinor`, `donationMaxAmountMinor` | `donation?: DonationConfig` (`suggestedAmounts`, `allowCustomAmount`, `minAmount`, `maxAmount`). Presence of `donation` is the flag. Minor → major units (divisor in Gap 17). |
+| `onPageRegistration`, `registrationOpensAt`, `registrationClosesAt` | Same |
+
+**Current settings with no target (drop or re-home)**
+
+`ticketingMode`, `multiCategoryRegistration`, `requireAttendeeDetails`, `loginRequired` (only `preRegistration.loginRequired` remains), `refundsEnabled`, `refundCutoffAt`, `eticketDeliveryEnabled`, `physicalDeliveryEnabled`. The last four overlap with `additionalServices` (`refundGuarantee`, `whatsappTickets`).
+
+**New target settings**
+
+- **Required:** `allowAccessRequests`, `autoPublishGuestMoments`, `enableGuestMoments`, `guestMomentsRequireCheckIn`, `enableInteractiveSeatMap`, `eventType`, `isFeatured`, `isRegistrationOpen`, `maxTicketsPerOrder`, `reservedSeating`, `restrictedToAccessList`, `showClusterFilter`, `clusterSelection` (`"filter" | "required"`), `salesTimerLabel`, `showSalesTimer`, `salesPhaseEndsAt`, `platformFeeEnabled`, `priceLabel`, `additionalServices`, `preRegistration`, `theme`, `applicationRegistration`, `raceRegistration`, `teamRegistration`, `tournamentRegistration`, `visibility` (see 18.6).
+
+The reference types declare the last ten of these as optional (for example `visibility?: EventVisibility`). In V4 they are required, so drop the `?` from each. V3 has no source for most of them, so each needs a documented default during migration.
+
+**Settings proposed in this guide (not yet in the target type).** Add these to `EventSettings` as optional fields: `orderHold` (Gap 8), `abandonedCartReminder` (Gap 9), `photoRequired` and `photoFieldLabel` (Gap 16).
+
+### 18.4 New supporting types
+
+`DecimalString`, `MarketingTrackerType`, `EventDetailTemplate`, `RegistrationField`, `AttachmentSpec`, `RaceWave`, `RaceAgeCategory`, `RaceRegistrationConfig`, `ApplicationStatus`, `ApplicationRegistrationConfig`, `DonationDonor`, `DonationCampaign`, `DonationConfig`, `PreRegistrationCta`, `PreRegistrationChannel`, `EarlyAccessConfig`, `PreRegistrationConfig`, `PreRegistrationViewer`, `EventCurrency`, `EventMediaItem`, `EventMedia`, `EventThemeFont`, `EventTheme`, `AdditionalServices`, `EventAddon`, `EventGalleryItem`, `EventCreative`, `EventPartner`, `EventSponsor`, `EventReviewSummary`, `EventMarketingTracker`, `EventImageMapArea`, `EventImageMapData`, `EventScheduleItem`.
+
+`EventCluster` is not in this list: it stays as it is in current V4.
+
+### 18.5 Media migration (V3 → V4)
+
+- Output shape is `EventMedia` = `{ type: "image" | "video"; src: string }[]`.
+- **Banner:** populate `content.bannerMedia` from V3 `home_slider_banner`, not from `banner`.
+- **Thumbnail:** populate `content.thumbnailMedia` from V3 `thumbnail`.
+- **V4-only media** (promo videos and extra banner items already in V4) are kept, per the migration rule.
+
+### 18.6 Visibility migration (V3 → V4)
+
+In V3, an event is visible on the site when `eventSettings.display` is `true`. V4 controls this with `settings.visibility`. The reference type marks it optional, with an absent value meaning public; in V4 it is required.
+
+```ts
+export type EventVisibility = "public" | "unlisted" | "private";
+
+// EventSettings (required in V4; see 18.3)
+visibility: EventVisibility;
+```
+
+**Mapping**
+
+| V3 `eventSettings.display` | V4 `settings.visibility` |
+| --- | --- |
+| `true` | `"public"` |
+| `false` | `"private"` |
+
+- Every event visible in V3 stays visible in V4, and every hidden V3 event stays hidden.
+- Every migrated event gets an explicit `visibility` value, because the field is required.
+- V3 `display` is a real source, so its mapped value replaces any existing V4 `visibility` during the merge.
+- The migration never produces `"unlisted"`; V3 has no equivalent state.
+
+**Open questions**
+
+- Settings with no target (listed in 18.3): drop each one, or re-home it? In particular, do the refund and delivery flags map to `additionalServices`?
+- Event fields with no target (`subtitle`, `seoTitle`, `acknowledgements`, `rulebookUrl`): drop or re-home?
+- Does `restrictedToAccessList` carry the same meaning as the current `eligibility` setting?
+- Where do kept V4-only media go: into `bannerMedia` or `thumbnailMedia`, and in what order relative to the V3 items?
+- What should a V3 event with no `display` value become: `"public"` or `"private"`?
+
 ## Migration and QA checklist
 
 **Econo Carnival Bangladesh Season 01**
@@ -625,6 +908,7 @@ On the ticket category, `photoRequired` is an optional boolean: omit it to inher
 - [ ] Every tier has `separateRegistrationPage: true`
 - [ ] Category select page lists all tiers with images and cluster filter
 - [ ] Each tier page opens the wizard and collects per-runner fields
+- [ ] Tier route segment (`id` or `slug`) confirmed and consistent
 - [ ] Behaviour matches V3 and the dhaka-marathon reference
 
 **All events — registration**
@@ -641,7 +925,11 @@ On the ticket category, `photoRequired` is an optional boolean: omit it to inher
 - [ ] Submitting the registration form (including team and runner details) creates an unpaid order and opens its checkout page
 - [ ] Checkout shows the order review, coupon field, additional services and price summary
 - [ ] Coupons are validated on the server; in a mixed order they apply only to tiers that allow them
-- [ ] Selected add-on services appear in the price summary; WhatsApp delivery requires a number
+- [ ] Platform fee line appears only when `platformFeeEnabled` is on, calculated from each tier's `platformFee` per the confirmed formula
+- [ ] Only services configured in `settings.additionalServices` are offered, each priced by its own `charge`
+- [ ] Selected services appear as separate lines; WhatsApp delivery requires a number
+- [ ] Order total includes tickets, discounts, platform fee and selected services
+- [ ] Totals, fee and services total are derived in selectors; only the selected services are stored
 - [ ] A regular tier that sells out while its order is unpaid is caught at checkout, before payment
 - [ ] Cancelled, failed or pending payment lands on the payment return page; the order stays in the cart
 - [ ] Free orders skip payment and reach the confirmation page
@@ -695,7 +983,7 @@ On the ticket category, `photoRequired` is an optional boolean: omit it to inher
 **Event cards**
 
 - [ ] "Starts from <price>" on the left and "Book now" on the right on every event card
-- [ ] Lowest price includes sold-out and not-yet-on-sale tiers
+- [ ] Lowest price includes sold-out and not-yet-on-sale tiers, whether computed from tiers or read from `minPrice`
 - [ ] Free events show "Free"
 - [ ] Sold-out events show a disabled "Sold out" button
 
@@ -724,9 +1012,35 @@ On the ticket category, `photoRequired` is an optional boolean: omit it to inher
 - [ ] Non-individual categories never show or require an upload, even with photo settings enabled
 - [ ] Server validates the requirement and saves each upload against the correct attendee
 
+**Ticket tier data model**
+
+- [ ] Tier type updated to `TicketCategory`, including `slug`, `altPriceText`, `minPerOrder`, `isHighlighted`, `photoRequired` and `bibSeries` (`RaceBibSeries`)
+- [ ] Mapper converts `kind` to lowercase `registrationType`, `currency` to `currencyCode` (plus `currencySymbol`) and `faceMinor` to `price` in major units, and drops `vatBps`
+- [ ] `null` `badge` and `altPriceText` are omitted
+- [ ] `teamMinSize` / `teamMaxSize` move into `teamRegistration`, created only when one is non-null
+- [ ] Every tier has a `platformFee`, with an explicit default where there is no source
+- [ ] Every registration field matches `RegistrationField` and has a `scope`
+- [ ] V3 → V4 merge keeps every V4-only tier option
+
+**Event detail, settings and media**
+
+- [ ] `EventDetail`, `EventSettings`, `EventContent` and the new supporting types updated
+- [ ] Settings renames applied; donation settings moved into `donation` in major units
+- [ ] Required settings, including `platformFeeEnabled`, `priceLabel`, `additionalServices`, `preRegistration`, `theme`, `applicationRegistration`, `raceRegistration`, `teamRegistration`, `tournamentRegistration` and `visibility`, are present on every event, with defaults where V3 has no source
+- [ ] `orderHold`, `abandonedCartReminder`, `photoRequired` and `photoFieldLabel` added to `EventSettings`
+- [ ] `eyebrow`, `summary`, `registrationNote`, `highlights` and `schedule` accept `null`, and templates hide their sections when `null`
+- [ ] `bannerMedia` comes from V3 `home_slider_banner` (not `banner`); `thumbnailMedia` comes from V3 `thumbnail`
+- [ ] V4-only media and settings are kept in the merge
+- [ ] V3 `display: true` events have `visibility: "public"` and V3 `display: false` events have `visibility: "private"`; visible V3 events are still visible in V4
+- [ ] `clusters` and `EventCluster` unchanged
+- [ ] Open questions in Gaps 17 and 18 resolved
+
 ## References
 
-Full list of event settings and registration modes: [Tickify event details and registration](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#tickify-event-details-and-registration). Full tier options: [Ticket category config](https://github.com/stage-crew/platform-docs/blob/main/ticket-category-config.md#ticketcategory-config).
+- Event settings and registration modes: [Tickify event details and registration](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#tickify-event-details-and-registration)
+- Event visibility: [Visibility](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#visibility)
+- Platform fee and additional services: [Additional services and the platform fee](https://github.com/stage-crew/platform-docs/blob/main/tickify-event-details-and-registration.md#additional-services-and-the-platform-fee)
+- Tier options and types: [Ticket category config](https://github.com/stage-crew/platform-docs/blob/main/ticket-category-config.md#ticketcategory-config) · [Types](https://github.com/stage-crew/platform-docs/blob/main/ticket-category-config.md#types)
 
 | Event | V3 | V4 |
 | --- | --- | --- |
