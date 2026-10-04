@@ -45,6 +45,7 @@ These seven keys are required by `EventSettingsConfig`. Every other setting has 
 | `preRegistration`         | An announcement before the sale. Not a mode config; any mode may have one.                                |
 | `theme`                   | One organizer hex and the face it is set in. Not a mode config either.                                    |
 | `additionalServices`      | Services sold beside a ticket (`refundGuarantee`, `whatsappTickets`), each with its own `charge`.         |
+| `visibility`              | Who can find the event: `public`, `unlisted` or `private`. Absent means `public`.                         |
 | `platformFeeEnabled`      | Whether the platform fee applies. Absent means it does; `false` for organizers not permitted to charge it. |
 | `applicationRegistration` | Questions, attachments, capacity and payment timing for `application`.                                    |
 | `raceRegistration`        | Waiver, age categories, waves and entrant rules for `race`.                                               |
@@ -89,6 +90,22 @@ platformFee?: number; // per ticket, for this tier
 ```
 
 `additionalServices` follows the same rule as `preRegistration` and `playerDocuments`: presence is the flag, so the organizer's toggle adds or removes the key and no boolean sits beside a charge to disagree with it. A category's `platformFee` applies at checkout unless `settings.platformFeeEnabled` is `false`. This module only carries the configuration. No sample event sets any of the three, so nothing in the shipped data exercises them.
+
+### Visibility
+
+```ts
+export type EventVisibility = "public" | "unlisted" | "private";
+
+visibility?: EventVisibility; // Absent means "public"
+```
+
+| Value      | Who can find the event                                                       |
+| ---------- | ---------------------------------------------------------------------------- |
+| `public`   | Everyone. Listed in browse and search.                                       |
+| `unlisted` | Anyone with the link. Absent from browse and search.                         |
+| `private`  | Only an organizer or an invited guest.                                       |
+
+These are the same three values the API stores on the event row, so the setting maps one to one rather than being translated. It is about discovery and access, not about whether registration is open: that stays with `status`, `isRegistrationOpen` and the availability resolver. An event can be `unlisted` and selling, or `public` and sold out. Hiding an event is an access decision, so it is only real where the server makes it; this setting describes the intent.
 
 ## Routes
 
